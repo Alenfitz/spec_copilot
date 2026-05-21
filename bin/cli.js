@@ -554,6 +554,150 @@ function cmdGate(args) {
           }
         }
       }
+
+      // ─── 反"太嗨"机制 1：嗨语言检测 ───
+      const HYPE_WORDS = [
+        '基本完成', '大部分', '核心已实现', '完美', '圆满', '非常好',
+        '整体可用', '初步可用', '差不多', '一气呵成', '大功告成', '基本可用'
+      ];
+      const filesToScan = [
+        { path: specPath, name: 'spec.md' },
+        { path: tasksPath, name: 'tasks.md' },
+        { path: logPath, name: 'log.md' }
+      ];
+      const hypeHits = [];
+      for (const f of filesToScan) {
+        if (!fs.existsSync(f.path)) continue;
+        const content = fs.readFileSync(f.path, 'utf-8');
+        for (const word of HYPE_WORDS) {
+          // 跳过 AGENTS 自身列出禁用词的语境（如出现在"禁用"/"禁止"附近）
+          const regex = new RegExp(`(?<!禁用[^\\n]{0,20}|禁止[^\\n]{0,20}|✗[^\\n]{0,40})${word}`, 'g');
+          const matches = content.match(regex);
+          if (matches) {
+            hypeHits.push(`${f.name}: "${word}" × ${matches.length}`);
+          }
+        }
+      }
+      if (hypeHits.length > 0) {
+        fail(`嗨语言检测命中（必须改写为可量化表述）：\n   ${hypeHits.join('\n   ')}`);
+      } else {
+        log.ok('嗨语言检测：clean');
+      }
+
+      // ─── 反"太嗨"机制 2：原始输出粘贴检测 ───
+      // 使用固定窗口截取，避免复杂 lookahead 在不同 markdown 层级下漏匹配
+      const sliceAfter = (text, marker, len = 800) => {
+        const idx = text.indexOf(marker);
+        return idx === -1 ? null : text.slice(idx + marker.length, idx + marker.length + len);
+      };
+      if (fs.existsSync(tasksPath)) {
+        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+        const taskBlocks = tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+        const evidenceFailures = [];
+        for (const block of taskBlocks) {
+          const titleMatch = block.match(/^## (Task \d+)/);
+          const taskName = titleMatch ? titleMatch[1] : '?';
+          const isDone = /状态[：:]\s*✅/.test(block) || /实际验证结果/.test(block);
+          if (!isDone) continue;
+          const window = sliceAfter(block, '实际验证结果');
+          if (window !== null) {
+            const hasRawOutput = /\$\s|>>>\s|HTTP\/[0-9]/.test(window);
+            if (!hasRawOutput) {
+              evidenceFailures.push(`${taskName}: 实际验证结果未粘贴原始输出（需以 $ / >>> / HTTP/ 开头）`);
+            }
+          }
+        }
+        if (evidenceFailures.length > 0) {
+          fail(`原始输出粘贴检测失败：\n   ${evidenceFailures.join('\n   ')}`);
+        } else if (taskBlocks.length > 0) {
+          log.ok(`原始输出粘贴检测：${taskBlocks.length} 个 task 均有原始输出`);
+        }
+      }
+
+      // ─── 反"太嗨"机制 3：强制负面声明 + 失败场景检测 ───
+      if (fs.existsSync(tasksPath)) {
+        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+        const taskBlocks = tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+        const declarationFailures = [];
+
+        // 字段必填检查函数：找到字段标签后，下一行/段落不能为空
+        const checkFieldFilled = (block, fieldName, taskName) => {
+          // 匹配 "- **字段名**（...）：内容" 或 "字段名：内容"
+          const regex = new RegExp(`${fieldName}[^\\n]*?[：:]\\s*([^\\n]*)`, 'm');
+          const m = block.match(regex);
+          if (!m) return null; // 字段不存在，跳过（兼容旧模板）
+          const val = (m[1] || '').replace(/[（(].*?[)）]/g, '').trim();
+          if (val.length < 1) {
+            return `${taskName}: "${fieldName}" 字段留空（无内容写"无"）`;
+          }
+          return null;
+        };
+
+        for (const block of taskBlocks) {
+          const titleMatch = block.match(/^## (Task \d+)/);
+          const taskName = titleMatch ? titleMatch[1] : '?';
+          const isDone = /状态[：:]\s*✅/.test(block) || /实际验证结果/.test(block);
+          if (!isDone) continue;
+
+          // 强制负面声明三件套
+          for (const field of ['未实现功能点', '已知缺陷', '简化或降级处理', '简化/降级处理']) {
+            const err = checkFieldFilled(block, field, taskName);
+            if (err) declarationFailures.push(err);
+          }
+
+          // 失败场景自我攻击：必须有至少 3 个非空场景
+          const scenarioWindow = sliceAfter(block, '失败场景自我攻击', 1500);
+          if (scenarioWindow !== null) {
+            const scenarios = [...scenarioWindow.matchAll(/失败场景[：:]\s*([^\n]+)/g)]
+              .map(m => m[1].replace(/_+/g, '').replace(/[（(].*?[)）]/g, '').trim())
+              .filter(s => s.length > 4);
+            if (scenarios.length < 3) {
+              declarationFailures.push(`${taskName}: 失败场景自我攻击只有 ${scenarios.length} 个有效场景（要求 ≥ 3）`);
+            }
+          }
+        }
+        if (declarationFailures.length > 0) {
+          fail(`负面声明/失败场景检测失败：\n   ${declarationFailures.join('\n   ')}`);
+        } else if (taskBlocks.length > 0) {
+          log.ok(`负面声明/失败场景：${taskBlocks.length} 个 task 全部完整`);
+        }
+      }
+
+      // ─── 反"太嗨"机制 4：校准差检测（自评 vs 实测） ───
+      if (fs.existsSync(tasksPath)) {
+        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+        // 提取自评数字
+        const selfCoverageMatch = tasksContent.match(/自评功能点覆盖率[：:][\s\S]{0,40}?(\d+)\s*\/\s*(\d+)/);
+        const selfBeMatch = tasksContent.match(/自评后端文件数[：:][\s\S]{0,30}?(\d+)/);
+        const selfFeMatch = tasksContent.match(/自评前端文件数[：:][\s\S]{0,30}?(\d+)/);
+
+        // 实测：复用前面 grep 出的 featurePointIds 和 matched
+        if (selfCoverageMatch && featurePointIds.length > 0) {
+          const selfPct = parseInt(selfCoverageMatch[1]) / parseInt(selfCoverageMatch[2]) * 100;
+          const actualPct = parseFloat((/* matched 在前面作用域可能不可见，重算 */ '').toString());
+          // 重新计算实测覆盖率（前面的 matched 在 if 块内）
+          let actualMatched = 0;
+          try {
+            for (const fpId of featurePointIds) {
+              try {
+                const r = execSync(`git grep -l -- "${fpId}"`, { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+                if (r && r.split('\n').filter(f => f && !f.startsWith('spec_copilot/') && !f.includes('.md')).length > 0) {
+                  actualMatched++;
+                }
+              } catch {}
+            }
+            const actualPctNum = actualMatched / featurePointIds.length * 100;
+            const delta = Math.abs(selfPct - actualPctNum);
+            if (delta > 30) {
+              fail(`校准差超标：自评覆盖率 ${selfPct.toFixed(1)}%，实测 ${actualPctNum.toFixed(1)}%，偏差 ${delta.toFixed(1)}% > 30% 红线 — 模型自我评估严重失准`);
+            } else if (delta > 10) {
+              log.warn(`校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）`);
+            } else {
+              log.ok(`校准差正常：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%`);
+            }
+          } catch {}
+        }
+      }
       break;
     }
     case 'test': {
