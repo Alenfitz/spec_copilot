@@ -441,10 +441,88 @@ function cmdGate(args) {
         }
       }
 
-      // Check: spec feature points should have corresponding code evidence
-      const featurePoints = specContent.match(/F\d{2}[：:]/g) || specContent.match(/功能点\s*\d+/g) || [];
-      if (featurePoints.length > 0) {
-        log.ok(`spec.md 含 ${featurePoints.length} 个功能点 — review 时必须逐条 grep 验证`);
+      // ─── 程序化覆盖率检查：spec 功能点 → 代码实现 ───
+      const featurePointIds = [...new Set(specContent.match(/F\d{2,}/g) || [])];
+      if (featurePointIds.length > 0) {
+        let matched = 0;
+        const missing = [];
+        const isGitRepo = (() => {
+          try {
+            execSync('git rev-parse --is-inside-work-tree', { cwd: projectRoot, stdio: 'ignore' });
+            return true;
+          } catch { return false; }
+        })();
+
+        for (const fpId of featurePointIds) {
+          let hit = false;
+          if (isGitRepo) {
+            try {
+              const result = execSync(`git grep -l -- "${fpId}"`, {
+                cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore']
+              }).trim();
+              const codeMatches = result.split('\n').filter(f =>
+                f && !f.startsWith('spec_copilot/') && !f.includes('.md')
+              );
+              hit = codeMatches.length > 0;
+            } catch { hit = false; }
+          }
+          if (hit) matched++;
+          else missing.push(fpId);
+        }
+
+        const coverage = (matched / featurePointIds.length * 100).toFixed(1);
+        if (!isGitRepo) {
+          log.warn(`非 git 仓库，跳过功能点覆盖率检查（spec 含 ${featurePointIds.length} 个功能点）`);
+        } else if (coverage < 80) {
+          fail(`功能点代码覆盖率 ${coverage}% (${matched}/${featurePointIds.length}) — 低于 80% 红线，缺失：${missing.slice(0, 10).join(', ')}${missing.length > 10 ? ' ...' : ''}`);
+        } else {
+          log.ok(`功能点代码覆盖率 ${coverage}% (${matched}/${featurePointIds.length})`);
+        }
+      }
+
+      // ─── 前后端工作量均衡检查 ───
+      const specMentionsFrontend = /前端|页面|组件|\.vue|Vue|React|UI 交互|界面/.test(specContent);
+      if (specMentionsFrontend) {
+        try {
+          // 优先用 feature 分支与 main 的差异；失败则退化为已 staged + committed 文件
+          let diffOutput = '';
+          try {
+            diffOutput = execSync('git diff --name-only main...HEAD', {
+              cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+          } catch {
+            try {
+              diffOutput = execSync('git diff --name-only master...HEAD', {
+                cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore']
+              }).trim();
+            } catch { diffOutput = ''; }
+          }
+
+          if (diffOutput) {
+            const files = diffOutput.split('\n').filter(f => f && !f.startsWith('spec_copilot/'));
+            const isBackend = (f) =>
+              /\.(java|kt|py|go|rb|cs|php)$/.test(f) && !/test/i.test(f);
+            const isFrontend = (f) =>
+              /\.(vue|tsx|jsx)$/.test(f) ||
+              (/\.(ts|js|css|scss|less)$/.test(f) && /(src|app|pages|views|components)\//.test(f));
+
+            const beCount = files.filter(isBackend).length;
+            const feCount = files.filter(isFrontend).length;
+
+            if (beCount > 0 && feCount === 0) {
+              fail(`spec 提及前端，但本次变更前端文件数为 0（后端 ${beCount} 文件）— 前端不得缺席`);
+            } else if (beCount > 0 && feCount > 0) {
+              const ratio = beCount / feCount;
+              if (ratio > 3) {
+                fail(`前后端文件数失衡：后端 ${beCount}，前端 ${feCount}（比 ${ratio.toFixed(1)}:1，超过 3:1 红线）— 前端实现严重不足`);
+              } else {
+                log.ok(`前后端文件数比 ${beCount}:${feCount}（在 3:1 内）`);
+              }
+            }
+          }
+        } catch (e) {
+          log.warn(`前后端比例检查跳过：${e.message.split('\n')[0]}`);
+        }
       }
 
       // Check: log.md Spec-Code deviation section should not be suspiciously empty for complex changes
