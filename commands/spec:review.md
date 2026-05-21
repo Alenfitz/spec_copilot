@@ -15,12 +15,36 @@ description: 三阶段审查（Spec 合规独立 agent + 代码质量 + 破坏�
 > v2.0.0+ 引入：必须使用 `spec-compliance-reviewer` agent profile。
 
 **Claude Code**（profile 已安装到 `.claude/agents/spec-compliance-reviewer.md`）：
-- 使用 Agent 工具调度：`subagent_type: spec-compliance-reviewer`
-- `prompt`: 提供本次变更名 + spec.md/tasks.md 路径 + 项目根路径 + 任务说明
+
+调用样例：
+```
+Agent({
+  subagent_type: "spec-compliance-reviewer",
+  description: "Spec 合规独立审查",
+  prompt: `请按你的角色 profile 完成对 <变更名> 的合规审查。
+输入：
+- spec.md: spec_copilot/changes/<变更名>/spec.md
+- tasks.md: spec_copilot/changes/<变更名>/tasks.md
+- 项目根目录: <当前 cwd>
+
+按你 profile 中 Step 1-6 顺序执行，输出严格遵循 profile §7 输出格式。`
+})
+```
 
 **opencode**（profile 已安装到 `.opencode/agent/spec-compliance-reviewer.md`）：
-- 使用 Task 工具调度：`subagent_type: spec-compliance-reviewer`
-- 提供同上参数
+
+调用样例（opencode Task 工具）：
+```
+task subagent_type=spec-compliance-reviewer
+  description="Spec 合规独立审查"
+  prompt:
+    请按你的角色 profile 完成对 <变更名> 的合规审查。
+    输入：
+    - spec.md: spec_copilot/changes/<变更名>/spec.md
+    - tasks.md: spec_copilot/changes/<变更名>/tasks.md
+    - 项目根目录: <当前 cwd>
+    按 profile Step 1-6 执行，严格按 §7 输出格式返回报告。
+```
 
 **其它宿主**（cursor / windsurf / copilot / cline）：
 1. 主 agent 自己 Read `spec_copilot/agents/spec-compliance-reviewer.md`，扮演该角色执行

@@ -776,6 +776,24 @@ function cmdAgents(args) {
   const projectRoot = findProjectRoot();
   const agentsDir = path.join(projectRoot, 'spec_copilot', 'agents');
 
+  // install 子命令：单独安装/刷新宿主的 sub-agent 文件
+  if (sub === 'install') {
+    const adapter = resolveAdapter(args.slice(1), projectRoot);
+    if (!adapter) {
+      log.err('无法确定宿主工具，请用 --tool 指定');
+      process.exit(1);
+    }
+    if (!adapter.agentsDir || typeof adapter.formatAgent !== 'function') {
+      log.warn(`宿主 ${adapter.name} 不支持 sub-agent —— 跳过安装`);
+      log.info('  其它宿主使用降级模式：主 agent Read spec_copilot/agents/*.md 扮演角色');
+      return;
+    }
+    log.title(`刷新 ${adapter.displayName} sub-agent`);
+    installAgentsForAdapter(adapter, pkgRoot(), projectRoot);
+    log.ok('完成');
+    return;
+  }
+
   if (!fs.existsSync(agentsDir)) {
     log.warn('spec_copilot/agents/ 目录不存在 — 请运行 update 拉取 v2.0.0 内置 agent');
     log.info('运行：npx @alenfitz/spec-copilot update --force');
@@ -798,6 +816,13 @@ function cmdAgents(args) {
     }
     console.log('🔒 标记表示推荐使用 sub-agent 独立执行');
     console.log('使用 `npx @alenfitz/spec-copilot agents show <name>` 查看完整 profile');
+  } else if (sub === 'help' || sub === '--help') {
+    console.log(`
+agents 子命令：
+  list                查看内置 Agent Profile
+  show <name>         查看完整 profile 内容
+  install [--tool X]  单独刷新宿主的 sub-agent 文件（不动其它文件）
+`);
   } else if (sub === 'show') {
     const name = args[1];
     if (!name) {
@@ -830,6 +855,15 @@ function detectSubagentSupport(projectRoot) {
     supportsSubagent: !!(adapter && adapter.supportsSubagent),
     agentsDir: adapter && adapter.agentsDir,
   };
+}
+
+/** 列出 framework/agents/ 内本框架自带的 profile 文件名（不含扩展名，不含 README） */
+function listFrameworkAgentNames() {
+  const srcAgentsDir = path.join(pkgRoot(), 'framework', 'agents');
+  if (!fs.existsSync(srcAgentsDir)) return [];
+  return fs.readdirSync(srcAgentsDir)
+    .filter(f => f.endsWith('.md') && f !== 'README.md')
+    .map(f => f.replace(/\.md$/, ''));
 }
 
 /**
@@ -1075,6 +1109,31 @@ function cmdUninstall(args) {
         log.ok(`已删除 ${adapter.commandsDir}/`);
       }
     }
+    // 精准清理本框架安装的 sub-agent 文件（保留用户自建的同目录其它 agent）
+    if (adapter.agentsDir) {
+      const hostAgentsDir = path.join(projectRoot, adapter.agentsDir);
+      if (fs.existsSync(hostAgentsDir)) {
+        const ourAgents = listFrameworkAgentNames();
+        let removed = 0;
+        for (const name of ourAgents) {
+          const f = path.join(hostAgentsDir, `${name}.md`);
+          if (fs.existsSync(f)) {
+            fs.unlinkSync(f);
+            removed++;
+          }
+        }
+        if (removed > 0) log.ok(`已删除 ${adapter.agentsDir}/ 下 ${removed} 个 spec-copilot agent（保留用户自建文件）`);
+        // 如目录为空，连目录一起删
+        try {
+          if (fs.readdirSync(hostAgentsDir).length === 0) {
+            fs.rmdirSync(hostAgentsDir);
+            log.info(`  ${adapter.agentsDir}/ 目录已空，一并移除`);
+          } else {
+            log.info(`  ${adapter.agentsDir}/ 保留（仍有其它文件）`);
+          }
+        } catch {}
+      }
+    }
   }
   if (fs.existsSync(scDir)) {
     rmDirRecursive(scDir);
@@ -1127,7 +1186,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot update [--force]            升级框架
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
-  npx @alenfitz/spec-copilot agents [list|show <name>]   查看内置 Agent Profiles
+  npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 

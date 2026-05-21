@@ -4,6 +4,7 @@ role: 独立 Spec 合规审查者
 when_to_use: /spec:review 阶段一（强制）
 trigger_phase: review
 needs_subagent: true
+tools: read, grep, glob, bash
 fallback: 主 agent 自行扮演（输出顶部必须标注"未使用独立 agent，结论可靠性降级"）
 ---
 

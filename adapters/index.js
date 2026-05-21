@@ -23,8 +23,11 @@ function stripFrontmatter(content) {
 }
 
 /**
- * 解析 markdown frontmatter 提取 name / role / when_to_use 等元数据
- * 用于生成宿主专属 agent 文件的 description
+ * 解析 markdown frontmatter 提取 name / role / tools 等元数据
+ * 用于生成宿主专属 agent 文件的描述与权限
+ *
+ * 支持的字段：name, role, when_to_use, trigger_phase, needs_subagent, tools
+ * tools 字段格式："read,grep,glob,bash"（逗号分隔），未指定则使用宿主默认
  */
 function parseAgentMeta(content) {
   const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -34,7 +37,53 @@ function parseAgentMeta(content) {
     const m = line.match(/^(\w+):\s*(.+)$/);
     if (m) meta[m[1]] = m[2].trim();
   }
+  // tools 转成数组
+  if (meta.tools && typeof meta.tools === 'string') {
+    meta.tools = meta.tools.split(',').map(s => s.trim()).filter(Boolean);
+  }
   return meta;
+}
+
+/**
+ * opencode agent frontmatter 模板
+ * 最后验证版本：opencode 2024-Q1（如 opencode frontmatter schema 改变需更新此处）
+ * 文档：https://github.com/sst/opencode 中关于 agent 配置的章节
+ */
+function buildOpencodeAgentFrontmatter(meta) {
+  // 默认只读工具集；profile 可在 tools 字段显式声明（如 ["read","write","edit"]）
+  const defaultTools = ['read', 'grep', 'glob', 'bash'];
+  const requested = (meta.tools && meta.tools.length > 0) ? meta.tools : defaultTools;
+  const allTools = ['read', 'grep', 'glob', 'bash', 'write', 'edit'];
+  const toolLines = allTools.map(t => `  ${t}: ${requested.includes(t) ? 'true' : 'false'}`);
+  return [
+    '---',
+    `description: ${meta.role || meta.name}`,
+    'mode: subagent',
+    'tools:',
+    ...toolLines,
+    '---',
+    '',
+  ].join('\n');
+}
+
+/**
+ * Claude Code agent frontmatter 模板
+ * 最后验证版本：Claude Code 1.x（如 schema 改变需更新此处）
+ */
+function buildClaudeCodeAgentFrontmatter(meta) {
+  // Claude Code 工具名首字母大写
+  const toolMap = { read: 'Read', grep: 'Grep', glob: 'Glob', bash: 'Bash', write: 'Write', edit: 'Edit' };
+  const defaultTools = ['read', 'grep', 'glob', 'bash'];
+  const requested = (meta.tools && meta.tools.length > 0) ? meta.tools : defaultTools;
+  const toolsStr = requested.map(t => toolMap[t] || t).join(', ');
+  return [
+    '---',
+    `name: ${meta.name}`,
+    `description: ${meta.role || meta.name}`,
+    `tools: ${toolsStr}`,
+    '---',
+    '',
+  ].join('\n');
 }
 
 // ─── 命令路由模板（无原生命令的工具追加到 prompt 末尾） ───────
@@ -100,25 +149,11 @@ const adapters = {
      * 移除原有 YAML 前置数据，替换为 opencode 期望的 frontmatter
      */
     formatAgent(content, meta) {
-      const body = stripFrontmatter(content);
-      const opencodeFm = [
-        '---',
-        `description: ${meta.role || meta.name}`,
-        'mode: subagent',
-        'tools:',
-        '  read: true',
-        '  grep: true',
-        '  glob: true',
-        '  bash: true',
-        '  write: false',
-        '  edit: false',
-        '---',
-        '',
-      ].join('\n');
-      return opencodeFm + body;
+      return buildOpencodeAgentFrontmatter(meta) + stripFrontmatter(content);
     },
 
-    cleanupPaths: ['AGENTS.md', '.opencode/commands', '.opencode/agent'],
+    // 注意：.opencode/agent 不整体删除，由 cli.js 按 agent 文件名精准清理（保护用户自建 agent）
+    cleanupPaths: ['AGENTS.md', '.opencode/commands'],
   },
 
   // ─── Claude Code ─────────────────────────────────────────
@@ -146,19 +181,11 @@ const adapters = {
     },
 
     formatAgent(content, meta) {
-      const body = stripFrontmatter(content);
-      const claudeFm = [
-        '---',
-        `name: ${meta.name}`,
-        `description: ${meta.role || meta.name}`,
-        'tools: Read, Grep, Glob, Bash',
-        '---',
-        '',
-      ].join('\n');
-      return claudeFm + body;
+      return buildClaudeCodeAgentFrontmatter(meta) + stripFrontmatter(content);
     },
 
-    cleanupPaths: ['CLAUDE.md', '.claude/commands', '.claude/agents'],
+    // 注意：.claude/agents 不整体删除，由 cli.js 按 agent 文件名精准清理（保护用户自建 agent）
+    cleanupPaths: ['CLAUDE.md', '.claude/commands'],
   },
 
   // ─── Cursor ──────────────────────────────────────────────

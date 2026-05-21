@@ -4,6 +4,7 @@ role: 破坏性测试设计者
 when_to_use: 🔴 复杂需求 review 通过后 / archive 前
 trigger_phase: review-after-pass
 needs_subagent: true
+tools: read, grep, glob, bash
 fallback: 主 agent 自行扮演（可靠性下降明显，仅作兜底）
 ---
 

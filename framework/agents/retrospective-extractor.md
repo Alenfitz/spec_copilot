@@ -4,6 +4,7 @@ role: 知识沉淀提取者
 when_to_use: /spec:archive 阶段，归档前
 trigger_phase: archive
 needs_subagent: true
+tools: read, grep, glob, bash
 fallback: 主 agent 自行扮演（容易陷入"完工成就感"，质量降级明显）
 ---
 
