@@ -440,6 +440,42 @@ function cmdGate(args) {
           fail(`tasks.md 中有 ${pendingTasks.length} 个未完成 task`);
         }
       }
+
+      // Check: spec feature points should have corresponding code evidence
+      const featurePoints = specContent.match(/F\d{2}[：:]/g) || specContent.match(/功能点\s*\d+/g) || [];
+      if (featurePoints.length > 0) {
+        log.ok(`spec.md 含 ${featurePoints.length} 个功能点 — review 时必须逐条 grep 验证`);
+      }
+
+      // Check: log.md Spec-Code deviation section should not be suspiciously empty for complex changes
+      if (isComplex && fs.existsSync(logPath)) {
+        const logContent = fs.readFileSync(logPath, 'utf-8');
+        const deviationMatch = logContent.match(/Spec-Code 偏差记录[\s\S]*?(?=##|$)/);
+        if (deviationMatch) {
+          const deviationSection = deviationMatch[0].replace(/Spec-Code 偏差记录/, '').trim();
+          const hasContent = deviationSection.replace(/[-\s|>*]/g, '').length > 5;
+          if (!hasContent) {
+            log.warn('⚠️  log.md Spec-Code 偏差记录为空 — 🔴 复杂需求应关注是否存在未记录的偏差');
+          } else {
+            log.ok('log.md Spec-Code 偏差记录已填写');
+          }
+        }
+      }
+
+      // Check: tasks.md change summary should be filled
+      if (fs.existsSync(tasksPath)) {
+        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+        const summaryMatch = tasksContent.match(/变更摘要[\s\S]*$/);
+        if (summaryMatch) {
+          const summarySection = summaryMatch[0].replace(/变更摘要/, '').trim();
+          const hasContent = summarySection.replace(/[-\s|>*⚠️/]/g, '').length > 10;
+          if (!hasContent) {
+            fail('tasks.md 变更摘要未填写 — apply 完成后必须填写');
+          } else {
+            log.ok('tasks.md 变更摘要已填写');
+          }
+        }
+      }
       break;
     }
     case 'test': {
