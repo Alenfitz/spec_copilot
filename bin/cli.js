@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { adapters, detectTools, supportedTools } = require('../adapters');
+const { adapters, detectTools, supportedTools, parseAgentMeta } = require('../adapters');
 
 // ─── 常量 ───────────────────────────────────────────────────
 
@@ -233,6 +233,9 @@ function cmdInstall(args) {
     log.ok(`spec_copilot/commands/ 已安装（${cmdCount} 个命令，通过 prompt 路由）`);
   }
 
+  // 5.5 安装 sub-agent profile 到宿主专属目录（如宿主支持）
+  installAgentsForAdapter(adapter, srcRoot, projectRoot);
+
   // 6. 生成提示词文件
   const promptPath = path.join(projectRoot, adapter.promptPath);
   const promptDir = path.dirname(promptPath);
@@ -336,6 +339,9 @@ function cmdUpdate(args) {
     copyDir(commandsSrc, cmdDest);
     log.ok(`${adapter.commandsDir}/ 已更新`);
   }
+
+  // 更新 sub-agent profile
+  installAgentsForAdapter(adapter, srcRoot, projectRoot);
 
   // 更新 prompt
   const promptPath = path.join(projectRoot, adapter.promptPath);
@@ -811,16 +817,47 @@ function cmdAgents(args) {
   }
 }
 
-/** 检测当前宿主是否支持 sub-agent 调度 */
+/** 检测当前宿主是否支持 sub-agent 调度（基于 adapter 声明的 supportsSubagent） */
 function detectSubagentSupport(projectRoot) {
   const stateFile = path.join(projectRoot, 'spec_copilot', TOOL_STATE_FILE);
   let tool = 'unknown';
   if (fs.existsSync(stateFile)) {
     tool = fs.readFileSync(stateFile, 'utf-8').trim();
   }
-  // 已知支持 Agent 工具的宿主
-  const supports = ['claude-code'];
-  return { tool, supportsSubagent: supports.includes(tool) };
+  const adapter = adapters[tool];
+  return {
+    tool,
+    supportsSubagent: !!(adapter && adapter.supportsSubagent),
+    agentsDir: adapter && adapter.agentsDir,
+  };
+}
+
+/**
+ * 把 framework/agents/*.md 转成宿主专属 sub-agent 文件
+ * 只对声明 agentsDir + formatAgent 的 adapter 生效（claude-code / opencode）
+ */
+function installAgentsForAdapter(adapter, srcRoot, projectRoot) {
+  if (!adapter.agentsDir || typeof adapter.formatAgent !== 'function') return;
+
+  const srcAgentsDir = path.join(srcRoot, 'framework', 'agents');
+  if (!fs.existsSync(srcAgentsDir)) return;
+
+  const destDir = path.join(projectRoot, adapter.agentsDir);
+  fs.mkdirSync(destDir, { recursive: true });
+
+  const profiles = fs.readdirSync(srcAgentsDir).filter(f => f.endsWith('.md') && f !== 'README.md');
+  let installed = 0;
+  for (const f of profiles) {
+    const content = fs.readFileSync(path.join(srcAgentsDir, f), 'utf-8');
+    const meta = parseAgentMeta(content);
+    if (!meta.name) meta.name = f.replace('.md', '');
+    const formatted = adapter.formatAgent(content, meta);
+    fs.writeFileSync(path.join(destDir, f), formatted, 'utf-8');
+    installed++;
+  }
+  if (installed > 0) {
+    log.ok(`${adapter.agentsDir}/ 已安装（${installed} 个 sub-agent profile，宿主可直接调用）`);
+  }
 }
 
 // ─── Doctor ─────────────────────────────────────────────────

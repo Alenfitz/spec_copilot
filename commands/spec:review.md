@@ -12,20 +12,24 @@ description: 三阶段审查（Spec 合规独立 agent + 代码质量 + 破坏�
 
 ## 阶段一：Spec Compliance（强制独立 agent）
 
-> v2.0.0 引入：必须使用 `spec-compliance-reviewer` agent profile。该 profile 在 `spec_copilot/agents/spec-compliance-reviewer.md`。
+> v2.0.0+ 引入：必须使用 `spec-compliance-reviewer` agent profile。
 
-**宿主为 claude-code（支持 Agent 工具）时**：
-1. Read `spec_copilot/agents/spec-compliance-reviewer.md`
-2. 通过 Agent 工具 spawn 独立子 agent：
-   - `subagent_type`: `general-purpose`
-   - `prompt`: profile 完整内容 + 本次变更 spec.md/tasks.md 路径 + 项目根路径
-3. 等子 agent 返回完整报告，**主 agent 不得 override 或软化结论**
-4. 把子 agent 报告嵌入到 spec.md §12 审查结论
+**Claude Code**（profile 已安装到 `.claude/agents/spec-compliance-reviewer.md`）：
+- 使用 Agent 工具调度：`subagent_type: spec-compliance-reviewer`
+- `prompt`: 提供本次变更名 + spec.md/tasks.md 路径 + 项目根路径 + 任务说明
 
-**其它宿主**：
-1. 主 agent 自己 Read profile 并扮演该角色执行
+**opencode**（profile 已安装到 `.opencode/agent/spec-compliance-reviewer.md`）：
+- 使用 Task 工具调度：`subagent_type: spec-compliance-reviewer`
+- 提供同上参数
+
+**其它宿主**（cursor / windsurf / copilot / cline）：
+1. 主 agent 自己 Read `spec_copilot/agents/spec-compliance-reviewer.md`，扮演该角色执行
 2. 报告顶部加 `⚠️ 未使用独立 agent，结论可靠性降级`
 3. 在结论里加：`独立性：降级`
+
+**调用方法用 `npx @alenfitz/spec-copilot doctor` 检测**：如果显示"宿主支持 sub-agent"，使用前两种方式；否则用降级方式。
+
+子 agent 返回报告后，**主 agent 不得 override 或软化结论**，必须把报告原样嵌入 spec.md §12。
 
 阶段一不通过（覆盖率 < 80% 或有 Critical 不一致）→ 直接返回 `/spec:fix`，不进入阶段二。
 
@@ -40,14 +44,11 @@ description: 三阶段审查（Spec 合规独立 agent + 代码质量 + 破坏�
 
 **何时跑**：阶段一和阶段二都通过后。
 
-**宿主为 claude-code 时**：
-1. Read `spec_copilot/agents/adversarial-tester.md`
-2. 通过 Agent 工具 spawn 独立子 agent：
-   - `subagent_type`: `general-purpose`
-   - `prompt`: profile + spec.md/tasks.md 路径 + 阶段一报告 + 项目根路径
-3. 等返回报告
+**Claude Code / opencode**（profile 已安装到宿主 agent 目录）：
+- 调用 `subagent_type: adversarial-tester`
+- 提供变更名 + spec.md/tasks.md 路径 + 阶段一报告 + 项目根路径
 
-**其它宿主**：扮演模式，标注降级。
+**其它宿主**：主 agent Read `spec_copilot/agents/adversarial-tester.md` 扮演该角色，标注降级。
 
 阶段三发现 Critical 缺陷 → 返回 `/spec:fix`，修复后重跑阶段三。
 

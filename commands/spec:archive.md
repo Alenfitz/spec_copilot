@@ -16,15 +16,13 @@ description: 归档变更 + 知识沉淀
 
 > v2.0.0 引入：归档前必须由独立 agent 决定哪些值得沉淀，避免主 agent 陷入"完工成就感"放水。
 
-**宿主为 claude-code（支持 Agent 工具）时**：
-1. Read `spec_copilot/agents/retrospective-extractor.md` 获得 agent profile
-2. 通过 Agent 工具 spawn 子 agent：
-   - `subagent_type`: `general-purpose`
-   - `prompt`: profile 内容 + 本次变更的 spec.md/tasks.md/log.md 路径 + 现有 knowledge/index.md 路径
-3. 等子 agent 返回报告，**只复述其结论**，不得自行"补充"更多教训
+**Claude Code / opencode**（profile 已安装到宿主 agent 目录）：
+- 调用 `subagent_type: retrospective-extractor`
+- 提供变更名 + spec.md/tasks.md/log.md 路径 + knowledge/index.md 路径
+- 等子 agent 返回报告，**只复述其结论**，不得自行"补充"更多教训
 
-**其它宿主（cursor / opencode 等）**：
-1. 主 agent 自己 Read `spec_copilot/agents/retrospective-extractor.md` 并按 profile 执行
+**其它宿主**：
+1. 主 agent 自己 Read `spec_copilot/agents/retrospective-extractor.md` 扮演该角色执行
 2. 报告顶部必须标注：`⚠️ 未使用独立 agent，结论可靠性降级`
 
 ### Step 1-4：常规归档动作

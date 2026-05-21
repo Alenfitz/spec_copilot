@@ -13,6 +13,30 @@
 const fs = require('fs');
 const path = require('path');
 
+/**
+ * 移除 markdown 文件的 YAML frontmatter（--- 开始结束）
+ * 用于在 install agent 时去掉框架的元数据后插入宿主期望的格式
+ */
+function stripFrontmatter(content) {
+  const match = content.match(/^---\n[\s\S]*?\n---\n?/);
+  return match ? content.slice(match[0].length) : content;
+}
+
+/**
+ * 解析 markdown frontmatter 提取 name / role / when_to_use 等元数据
+ * 用于生成宿主专属 agent 文件的 description
+ */
+function parseAgentMeta(content) {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return { name: '', role: '', when_to_use: '' };
+  const meta = {};
+  for (const line of match[1].split('\n')) {
+    const m = line.match(/^(\w+):\s*(.+)$/);
+    if (m) meta[m[1]] = m[2].trim();
+  }
+  return meta;
+}
+
 // ─── 命令路由模板（无原生命令的工具追加到 prompt 末尾） ───────
 
 function buildCommandRoutingSection() {
@@ -55,6 +79,8 @@ const adapters = {
     promptPath: 'AGENTS.md',
     commandsDir: '.opencode/commands',
     hasNativeCommands: true,
+    agentsDir: '.opencode/agent',  // 安装 sub-agent 的目录
+    supportsSubagent: true,
 
     detect(projectRoot) {
       return fs.existsSync(path.join(projectRoot, '.opencode')) ||
@@ -66,10 +92,33 @@ const adapters = {
     },
 
     formatCommand(content, _meta) {
-      return content; // opencode uses same format as our command files
+      return content;
     },
 
-    cleanupPaths: ['AGENTS.md', '.opencode/commands'],
+    /**
+     * 把 framework/agents/<name>.md 转成 opencode 子 agent 格式
+     * 移除原有 YAML 前置数据，替换为 opencode 期望的 frontmatter
+     */
+    formatAgent(content, meta) {
+      const body = stripFrontmatter(content);
+      const opencodeFm = [
+        '---',
+        `description: ${meta.role || meta.name}`,
+        'mode: subagent',
+        'tools:',
+        '  read: true',
+        '  grep: true',
+        '  glob: true',
+        '  bash: true',
+        '  write: false',
+        '  edit: false',
+        '---',
+        '',
+      ].join('\n');
+      return opencodeFm + body;
+    },
+
+    cleanupPaths: ['AGENTS.md', '.opencode/commands', '.opencode/agent'],
   },
 
   // ─── Claude Code ─────────────────────────────────────────
@@ -80,6 +129,8 @@ const adapters = {
     promptPath: 'CLAUDE.md',
     commandsDir: '.claude/commands',
     hasNativeCommands: true,
+    agentsDir: '.claude/agents',
+    supportsSubagent: true,
 
     detect(projectRoot) {
       return fs.existsSync(path.join(projectRoot, '.claude')) ||
@@ -91,10 +142,23 @@ const adapters = {
     },
 
     formatCommand(content, _meta) {
-      return content; // Claude Code uses same frontmatter format
+      return content;
     },
 
-    cleanupPaths: ['CLAUDE.md', '.claude/commands'],
+    formatAgent(content, meta) {
+      const body = stripFrontmatter(content);
+      const claudeFm = [
+        '---',
+        `name: ${meta.name}`,
+        `description: ${meta.role || meta.name}`,
+        'tools: Read, Grep, Glob, Bash',
+        '---',
+        '',
+      ].join('\n');
+      return claudeFm + body;
+    },
+
+    cleanupPaths: ['CLAUDE.md', '.claude/commands', '.claude/agents'],
   },
 
   // ─── Cursor ──────────────────────────────────────────────
@@ -215,4 +279,4 @@ function supportedTools() {
   return Object.keys(adapters);
 }
 
-module.exports = { adapters, detectTools, supportedTools, buildCommandRoutingSection };
+module.exports = { adapters, detectTools, supportedTools, buildCommandRoutingSection, stripFrontmatter, parseAgentMeta };
