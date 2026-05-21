@@ -11,10 +11,28 @@ description: 归档变更 + 知识沉淀
 运行 `npx @alenfitz/spec-copilot gate <变更名> archive`（跨平台门禁检查）
 
 必做步骤：
-1. 逐条展示 log.md "知识发现"，用户确认后写入 `spec_copilot/knowledge/index.md`（带 tag）
-2. 更新 spec.md status → done
-3. 移动 `spec_copilot/changes/<变更名>/` → `spec_copilot/archives/<YYYY-MM>/<变更名>/`
-4. 提示合并分支：`git merge feature/<变更名> --no-ff`
+
+### Step 0：调用 retrospective-extractor agent 提炼真正值得沉淀的教训
+
+> v2.0.0 引入：归档前必须由独立 agent 决定哪些值得沉淀，避免主 agent 陷入"完工成就感"放水。
+
+**宿主为 claude-code（支持 Agent 工具）时**：
+1. Read `spec_copilot/agents/retrospective-extractor.md` 获得 agent profile
+2. 通过 Agent 工具 spawn 子 agent：
+   - `subagent_type`: `general-purpose`
+   - `prompt`: profile 内容 + 本次变更的 spec.md/tasks.md/log.md 路径 + 现有 knowledge/index.md 路径
+3. 等子 agent 返回报告，**只复述其结论**，不得自行"补充"更多教训
+
+**其它宿主（cursor / opencode 等）**：
+1. 主 agent 自己 Read `spec_copilot/agents/retrospective-extractor.md` 并按 profile 执行
+2. 报告顶部必须标注：`⚠️ 未使用独立 agent，结论可靠性降级`
+
+### Step 1-4：常规归档动作
+1. 根据 retrospective-extractor 报告，逐条展示**入选的 knowledge 候选**给用户，确认后写入 `spec_copilot/knowledge/index.md`（带 tag）
+2. 如有 Rules 更新建议，单独询问用户是否落地
+3. 更新 spec.md status → done
+4. 移动 `spec_copilot/changes/<变更名>/` → `spec_copilot/archives/<YYYY-MM>/<变更名>/`
+5. 提示合并分支：`git merge feature/<变更名> --no-ff`
 
 ## 自动生成/更新项目文档
 

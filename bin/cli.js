@@ -185,6 +185,9 @@ function cmdInstall(args) {
   copyDir(path.join(frameworkSrc, 'stack-adapters'), path.join(scDir, 'stack-adapters'));
   copyDir(path.join(frameworkSrc, 'changes', 'templates'), path.join(scDir, 'changes', 'templates'));
   copyDir(path.join(frameworkSrc, 'scripts'), path.join(scDir, 'scripts'));
+  if (fs.existsSync(path.join(frameworkSrc, 'agents'))) {
+    copyDir(path.join(frameworkSrc, 'agents'), path.join(scDir, 'agents'));
+  }
 
   ['VERSION', 'CHANGELOG.md'].forEach(f => {
     const src = path.join(frameworkSrc, f);
@@ -314,6 +317,9 @@ function cmdUpdate(args) {
 
   copyDir(path.join(frameworkSrc, 'changes', 'templates'), path.join(scDir, 'changes', 'templates'));
   copyDir(path.join(frameworkSrc, 'scripts'), path.join(scDir, 'scripts'));
+  if (fs.existsSync(path.join(frameworkSrc, 'agents'))) {
+    copyDir(path.join(frameworkSrc, 'agents'), path.join(scDir, 'agents'));
+  }
 
   ['VERSION', 'CHANGELOG.md'].forEach(f => {
     const src = path.join(frameworkSrc, f);
@@ -750,6 +756,73 @@ function cmdLint(args) {
   }
 }
 
+// ─── Agents ─────────────────────────────────────────────────
+
+/**
+ * 列出当前项目可用的 agent profile，并提示宿主是否支持 sub-agent
+ *
+ * 用法：
+ *   npx @alenfitz/spec-copilot agents [list]
+ *   npx @alenfitz/spec-copilot agents show <name>
+ */
+function cmdAgents(args) {
+  const sub = args[0] || 'list';
+  const projectRoot = findProjectRoot();
+  const agentsDir = path.join(projectRoot, 'spec_copilot', 'agents');
+
+  if (!fs.existsSync(agentsDir)) {
+    log.warn('spec_copilot/agents/ 目录不存在 — 请运行 update 拉取 v2.0.0 内置 agent');
+    log.info('运行：npx @alenfitz/spec-copilot update --force');
+    process.exit(1);
+  }
+
+  if (sub === 'list') {
+    log.title('内置 Agent Profiles');
+    const files = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md') && f !== 'README.md');
+    for (const f of files) {
+      const content = fs.readFileSync(path.join(agentsDir, f), 'utf-8');
+      const nameMatch = content.match(/^name:\s*(.+)$/m);
+      const roleMatch = content.match(/^role:\s*(.+)$/m);
+      const whenMatch = content.match(/^when_to_use:\s*(.+)$/m);
+      const needsSub = /needs_subagent:\s*true/.test(content);
+      console.log(`  ${needsSub ? '🔒' : '  '} ${nameMatch ? nameMatch[1] : f}`);
+      if (roleMatch) console.log(`     角色: ${roleMatch[1]}`);
+      if (whenMatch) console.log(`     触发: ${whenMatch[1]}`);
+      console.log('');
+    }
+    console.log('🔒 标记表示推荐使用 sub-agent 独立执行');
+    console.log('使用 `npx @alenfitz/spec-copilot agents show <name>` 查看完整 profile');
+  } else if (sub === 'show') {
+    const name = args[1];
+    if (!name) {
+      log.err('用法: npx @alenfitz/spec-copilot agents show <name>');
+      process.exit(2);
+    }
+    const file = path.join(agentsDir, `${name}.md`);
+    if (!fs.existsSync(file)) {
+      log.err(`未找到 agent profile: ${name}`);
+      log.info(`已安装的 profile: ${fs.readdirSync(agentsDir).filter(f => f.endsWith('.md') && f !== 'README.md').map(f => f.replace('.md', '')).join(', ')}`);
+      process.exit(1);
+    }
+    process.stdout.write(fs.readFileSync(file, 'utf-8'));
+  } else {
+    log.err(`未知子命令: ${sub}（可用: list / show）`);
+    process.exit(2);
+  }
+}
+
+/** 检测当前宿主是否支持 sub-agent 调度 */
+function detectSubagentSupport(projectRoot) {
+  const stateFile = path.join(projectRoot, 'spec_copilot', TOOL_STATE_FILE);
+  let tool = 'unknown';
+  if (fs.existsSync(stateFile)) {
+    tool = fs.readFileSync(stateFile, 'utf-8').trim();
+  }
+  // 已知支持 Agent 工具的宿主
+  const supports = ['claude-code'];
+  return { tool, supportsSubagent: supports.includes(tool) };
+}
+
 // ─── Doctor ─────────────────────────────────────────────────
 
 function cmdDoctor() {
@@ -860,6 +933,25 @@ function cmdDoctor() {
     }
   } else if (fs.existsSync(path.join(projectRoot, '.git'))) {
     log.warn('Git pre-commit hook 未安装（可选）');
+  }
+
+  // 检查 agents/ 目录（v2.0.0 引入）
+  const agentsDir = path.join(scDir, 'agents');
+  if (fs.existsSync(agentsDir)) {
+    const profiles = fs.readdirSync(agentsDir)
+      .filter(f => f.endsWith('.md') && f !== 'README.md');
+    log.ok(`内置 Agent Profiles：${profiles.length} 个（${profiles.map(f => f.replace('.md', '')).join(', ')}）`);
+
+    // 检测宿主是否支持 sub-agent
+    const { tool, supportsSubagent } = detectSubagentSupport(projectRoot);
+    if (supportsSubagent) {
+      log.ok(`宿主 ${tool} 支持 sub-agent，agent 可独立运行`);
+    } else {
+      log.warn(`宿主 ${tool} 未知/不支持 sub-agent，agent 将以"扮演"模式运行（结论可靠性降级）`);
+      log.info('  建议在 claude-code 中执行 /spec:review 以获得独立 agent 判定');
+    }
+  } else {
+    log.warn('spec_copilot/agents/ 不存在 — 运行 update --force 拉取 v2.0.0 内置 agent');
   }
 
   // 检查 stack adapter
@@ -998,6 +1090,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot update [--force]            升级框架
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
+  npx @alenfitz/spec-copilot agents [list|show <name>]   查看内置 Agent Profiles
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 
@@ -1025,6 +1118,9 @@ switch (cmd) {
     break;
   case 'lint':
     cmdLint(args.slice(1));
+    break;
+  case 'agents':
+    cmdAgents(args.slice(1));
     break;
   case 'doctor':
   case 'check':
