@@ -447,17 +447,23 @@ function cmdGate(args) {
       }
       if (fs.existsSync(tasksPath)) {
         const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
-        const pendingTasks = tasksContent.match(/状态：待完成/g) || [];
+        const pendingTasks = tasksContent.match(/状态[：:]\s*(待完成|未完成|进行中|todo|wip)/gi) || [];
         if (pendingTasks.length > 0) {
           fail(`tasks.md 中有 ${pendingTasks.length} 个未完成 task`);
         }
       }
 
-      // ─── 程序化覆盖率检查：spec 功能点 → 代码实现 ───
+      // ─── 程序化覆盖率检查：spec 功能点 → 代码实现（加权：前+后端均有 = 1 分；仅后端 = 0.5；仅前端 = 0.5；都无 = 0） ───
       const featurePointIds = [...new Set(specContent.match(/F\d{2,}/g) || [])];
+      // 简化的前后端文件分类
+      const isFrontendFile = (f) =>
+        /\.(vue|tsx|jsx)$/.test(f) ||
+        (/\.(ts|js|css|scss|less)$/.test(f) && /(src|app|pages|views|components)\//.test(f));
+      const isBackendFile = (f) =>
+        /\.(java|kt|py|go|rb|cs|php)$/.test(f);
+
+      let featureMatched = 0; // 用于校准差检测时复用
       if (featurePointIds.length > 0) {
-        let matched = 0;
-        const missing = [];
         const isGitRepo = (() => {
           try {
             execSync('git rev-parse --is-inside-work-tree', { cwd: projectRoot, stdio: 'ignore' });
@@ -465,8 +471,15 @@ function cmdGate(args) {
           } catch { return false; }
         })();
 
+        const specMentionsFE = /前端|页面|组件|\.vue|Vue|React|UI 交互|界面/.test(specContent);
+        let weightedScore = 0;
+        const fullHits = [];      // 前后端都命中
+        const beOnlyHits = [];    // 仅后端命中
+        const feOnlyHits = [];    // 仅前端命中
+        const missing = [];
+
         for (const fpId of featurePointIds) {
-          let hit = false;
+          let beHit = false, feHit = false;
           if (isGitRepo) {
             try {
               const result = execSync(`git grep -l -- "${fpId}"`, {
@@ -475,21 +488,87 @@ function cmdGate(args) {
               const codeMatches = result.split('\n').filter(f =>
                 f && !f.startsWith('spec_copilot/') && !f.includes('.md')
               );
-              hit = codeMatches.length > 0;
-            } catch { hit = false; }
+              beHit = codeMatches.some(isBackendFile);
+              feHit = codeMatches.some(isFrontendFile);
+            } catch {}
           }
-          if (hit) matched++;
-          else missing.push(fpId);
+          if (beHit && feHit) { weightedScore += 1; fullHits.push(fpId); featureMatched++; }
+          else if (beHit)     { weightedScore += specMentionsFE ? 0.5 : 1; beOnlyHits.push(fpId); featureMatched++; }
+          else if (feHit)     { weightedScore += 0.5; feOnlyHits.push(fpId); featureMatched++; }
+          else                { missing.push(fpId); }
         }
 
-        const coverage = (matched / featurePointIds.length * 100).toFixed(1);
+        const rawCoverage = (featureMatched / featurePointIds.length * 100).toFixed(1);
+        const weightedCoverage = (weightedScore / featurePointIds.length * 100).toFixed(1);
+
         if (!isGitRepo) {
           log.warn(`非 git 仓库，跳过功能点覆盖率检查（spec 含 ${featurePointIds.length} 个功能点）`);
-        } else if (coverage < 80) {
-          fail(`功能点代码覆盖率 ${coverage}% (${matched}/${featurePointIds.length}) — 低于 80% 红线，缺失：${missing.slice(0, 10).join(', ')}${missing.length > 10 ? ' ...' : ''}`);
+        } else if (weightedCoverage < 80) {
+          const detail = [
+            `前+后端均命中 ${fullHits.length}`,
+            `仅后端 ${beOnlyHits.length}`,
+            `仅前端 ${feOnlyHits.length}`,
+            `未命中 ${missing.length}`,
+          ].join(' / ');
+          fail(`加权功能点覆盖率 ${weightedCoverage}% (raw ${rawCoverage}%) — 低于 80% 红线\n   ${detail}\n   未命中：${missing.slice(0, 10).join(', ')}${missing.length > 10 ? ' ...' : ''}${specMentionsFE && beOnlyHits.length > 0 ? `\n   ⚠️ 仅后端命中：${beOnlyHits.slice(0, 10).join(', ')}${beOnlyHits.length > 10 ? ' ...' : ''}（spec 提及前端，每项扣 0.5 分）` : ''}`);
         } else {
-          log.ok(`功能点代码覆盖率 ${coverage}% (${matched}/${featurePointIds.length})`);
+          log.ok(`加权功能点覆盖率 ${weightedCoverage}% (raw ${rawCoverage}%): 前+后端 ${fullHits.length} / 仅后端 ${beOnlyHits.length} / 仅前端 ${feOnlyHits.length} / 未命中 ${missing.length}`);
         }
+      }
+
+      // ─── 反"太嗨"机制 6：前端死代码检测（文件存在但无引用） ───
+      // 针对"创建 5 个票模板但 index.vue hardcode 一种"这类场景：
+      // 扫描 src/views 和 src/components 下的 .vue / .tsx / .jsx 文件，
+      // 用 git grep 检查是否在任何其它文件里被 import 或在路由中引用
+      try {
+        const feRoots = ['app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+        if (feRoots.length > 0) {
+          const candidates = [];
+          for (const root of feRoots) {
+            const walk = (dir) => {
+              if (!fs.existsSync(dir)) return;
+              for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, f.name);
+                if (f.isDirectory()) {
+                  if (!/node_modules|dist|\.git/.test(f.name)) walk(full);
+                } else if (/\.(vue|tsx|jsx)$/.test(f.name)) {
+                  // 排除入口文件（main / index / app / router 一律不查）
+                  if (!/^(main|index|App|router)\.(vue|tsx|jsx)$/i.test(f.name)) {
+                    candidates.push(path.relative(projectRoot, full));
+                  }
+                }
+              }
+            };
+            walk(path.join(projectRoot, root));
+          }
+
+          const deadFiles = [];
+          for (const file of candidates) {
+            const baseName = path.basename(file).replace(/\.(vue|tsx|jsx)$/, '');
+            // grep 整个项目找 import / from 引用，排除自身
+            try {
+              const result = execSync(
+                `git grep -l "${baseName}" -- ':!${file}' ':!spec_copilot/*' ':!*.md'`,
+                { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }
+              ).trim();
+              const refs = result.split('\n').filter(Boolean);
+              if (refs.length === 0) {
+                deadFiles.push(file);
+              }
+            } catch {
+              // git grep 无命中会 exit 1，视为死文件
+              deadFiles.push(file);
+            }
+          }
+
+          if (deadFiles.length > 0) {
+            fail(`前端死代码检测命中（文件存在但从未被 import）：\n   ${deadFiles.slice(0, 15).join('\n   ')}${deadFiles.length > 15 ? `\n   ... 还有 ${deadFiles.length - 15} 个` : ''}\n   ⚠️ 这些组件不会出现在任何用户路径上 = 等同未实现`);
+          } else if (candidates.length > 0) {
+            log.ok(`前端死代码检测：${candidates.length} 个组件均被引用`);
+          }
+        }
+      } catch (e) {
+        log.warn(`前端死代码检测跳过：${e.message.split('\n')[0]}`);
       }
 
       // ─── 前后端工作量均衡检查 ───
@@ -552,14 +631,19 @@ function cmdGate(args) {
         }
       }
 
-      // Check: tasks.md change summary should be filled
+      // Check: tasks.md change summary should be filled (只截取到下一个 ## 标题，避免把其它段落算进来)
       if (fs.existsSync(tasksPath)) {
         const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
-        const summaryMatch = tasksContent.match(/变更摘要[\s\S]*$/);
+        // 用 multiline + 非贪婪 + lookahead 截到下一个 ## 标题或 EOF
+        const summaryMatch = tasksContent.match(/##\s*变更摘要([\s\S]*?)(?=^##\s|\Z)/m);
         if (summaryMatch) {
-          const summarySection = summaryMatch[0].replace(/变更摘要/, '').trim();
-          const hasContent = summarySection.replace(/[-\s|>*⚠️/]/g, '').length > 10;
-          if (!hasContent) {
+          let body = summaryMatch[1];
+          // 剥掉 markdown 噪音（提示块、引用、空白、装饰符）
+          body = body
+            .replace(/^\s*>[^\n]*$/gm, '')      // 引用行 (> ⚠️ 提示)
+            .replace(/[-\s|>*⚠️/_]/g, '')       // 装饰符
+            .replace(/[:：]/g, '');             // 单独冒号
+          if (body.length < 20) {
             fail('tasks.md 变更摘要未填写 — apply 完成后必须填写');
           } else {
             log.ok('tasks.md 变更摘要已填写');
@@ -596,6 +680,52 @@ function cmdGate(args) {
         log.ok('嗨语言检测：clean');
       }
 
+      // ─── 反"太嗨"机制 1.5：高分比例自夸检测 ───
+      // 形如 "22/23 功能点已实现"、"已完成 95%" 这类"分子接近分母"声明 ——
+      // 必须同时附带"未实现清单"，否则视为夸大。
+      const overstatementHits = [];
+      for (const f of filesToScan) {
+        if (!fs.existsSync(f.path)) continue;
+        const content = fs.readFileSync(f.path, 'utf-8');
+        // 模式 A：分式 X/Y 后接"已实现/完成/通过"等正向词
+        const fracRegex = /(\d+)\s*\/\s*(\d+)\s*(?:个)?(?:功能点|项|条|任务|test|用例)?\s*(?:已)?(?:实现|完成|通过|落地)/g;
+        let m;
+        while ((m = fracRegex.exec(content)) !== null) {
+          const num = parseInt(m[1], 10);
+          const den = parseInt(m[2], 10);
+          if (den >= 5 && num / den >= 0.9 && num < den) {
+            // 分子接近分母（>= 90% 且 != 100%），必须在附近 200 字内提到"未实现"
+            const ctx = content.slice(Math.max(0, m.index - 100), Math.min(content.length, m.index + m[0].length + 200));
+            if (!/未实现|缺失|未做|skipped|TODO|占位/i.test(ctx)) {
+              overstatementHits.push(`${f.name}: "${m[0].trim()}" 未列出未实现清单（声称 ${num}/${den} 完成，剩余 ${den - num} 项需明确说明哪些没做）`);
+            }
+          }
+          // 100% 完成声明也要求附带"实现位置"或"无遗漏"标记
+          if (den >= 10 && num === den) {
+            const ctx = content.slice(Math.max(0, m.index - 100), Math.min(content.length, m.index + m[0].length + 200));
+            if (!/见.*\.java|见.*\.vue|见.*\.ts|文件:|行号|无遗漏|完整覆盖/i.test(ctx)) {
+              overstatementHits.push(`${f.name}: "${m[0].trim()}" 声称 100% 完成但未给出代码证据（需附"文件:行号"或"无遗漏"声明）`);
+            }
+          }
+        }
+        // 模式 B：百分比 >= 90% 的完成声明
+        const pctRegex = /(?:覆盖|完成|实现|通过)\s*率?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%/g;
+        while ((m = pctRegex.exec(content)) !== null) {
+          const pct = parseFloat(m[1]);
+          if (pct >= 90 && pct < 100) {
+            const ctx = content.slice(Math.max(0, m.index - 50), Math.min(content.length, m.index + m[0].length + 200));
+            if (!/未实现|缺失|未做|TODO/i.test(ctx)) {
+              overstatementHits.push(`${f.name}: 声称 ${pct}% 完成但未列出缺失项`);
+            }
+          }
+        }
+      }
+      if (overstatementHits.length > 0) {
+        fail(`高分比例自夸检测（声称接近完成必须列出未完成项）：\n   ${overstatementHits.join('\n   ')}`);
+      } else {
+        log.ok('高分比例自夸检测：clean');
+      }
+
       // ─── 反"太嗨"机制 2：原始输出粘贴检测 ───
       // 使用固定窗口截取，避免复杂 lookahead 在不同 markdown 层级下漏匹配
       const sliceAfter = (text, marker, len = 800) => {
@@ -609,7 +739,7 @@ function cmdGate(args) {
         for (const block of taskBlocks) {
           const titleMatch = block.match(/^## (Task \d+)/);
           const taskName = titleMatch ? titleMatch[1] : '?';
-          const isDone = /状态[：:]\s*✅/.test(block) || /实际验证结果/.test(block);
+          const isDone = /状态[：:]\s*(✅|已完成|完成|已交付|done)/i.test(block) || /实际验证结果/.test(block);
           if (!isDone) continue;
           const window = sliceAfter(block, '实际验证结果');
           if (window !== null) {
@@ -648,7 +778,7 @@ function cmdGate(args) {
         for (const block of taskBlocks) {
           const titleMatch = block.match(/^## (Task \d+)/);
           const taskName = titleMatch ? titleMatch[1] : '?';
-          const isDone = /状态[：:]\s*✅/.test(block) || /实际验证结果/.test(block);
+          const isDone = /状态[：:]\s*(✅|已完成|完成|已交付|done)/i.test(block) || /实际验证结果/.test(block);
           if (!isDone) continue;
 
           // 强制负面声明三件套
@@ -683,22 +813,11 @@ function cmdGate(args) {
         const selfBeMatch = tasksContent.match(/自评后端文件数[：:][\s\S]{0,30}?(\d+)/);
         const selfFeMatch = tasksContent.match(/自评前端文件数[：:][\s\S]{0,30}?(\d+)/);
 
-        // 实测：复用前面 grep 出的 featurePointIds 和 matched
+        // 实测：复用前面 grep 出的 featurePointIds 和 featureMatched（加权前的命中数）
         if (selfCoverageMatch && featurePointIds.length > 0) {
           const selfPct = parseInt(selfCoverageMatch[1]) / parseInt(selfCoverageMatch[2]) * 100;
-          const actualPct = parseFloat((/* matched 在前面作用域可能不可见，重算 */ '').toString());
-          // 重新计算实测覆盖率（前面的 matched 在 if 块内）
-          let actualMatched = 0;
           try {
-            for (const fpId of featurePointIds) {
-              try {
-                const r = execSync(`git grep -l -- "${fpId}"`, { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
-                if (r && r.split('\n').filter(f => f && !f.startsWith('spec_copilot/') && !f.includes('.md')).length > 0) {
-                  actualMatched++;
-                }
-              } catch {}
-            }
-            const actualPctNum = actualMatched / featurePointIds.length * 100;
+            const actualPctNum = featureMatched / featurePointIds.length * 100;
             const delta = Math.abs(selfPct - actualPctNum);
             if (delta > 30) {
               fail(`校准差超标：自评覆盖率 ${selfPct.toFixed(1)}%，实测 ${actualPctNum.toFixed(1)}%，偏差 ${delta.toFixed(1)}% > 30% 红线 — 模型自我评估严重失准`);
