@@ -843,10 +843,41 @@ function cmdGate(args) {
       break;
     }
     case 'archive': {
+      // 1. spec §12 必须显式通过（保留原检查）
       if (/结论：通过/.test(specContent)) {
         log.ok('spec.md §12 审查结论为通过');
       } else {
         fail('spec.md §12 审查结论未通过');
+      }
+
+      // 2. 必须有 review gate 通过的哨兵文件（防止模型自己写"通过"绕过 review gate）
+      const reviewSentinel = path.join(changeDir, '.gate-review-passed');
+      if (!fs.existsSync(reviewSentinel)) {
+        fail('缺少 .gate-review-passed 哨兵 — 模型不能仅靠在 spec.md §12 写"通过"就 archive，必须实际跑过 `gate <name> review` 且通过');
+      } else {
+        // 3. 哨兵的 mtime 必须不早于 spec/tasks/log 的最后修改时间（任何后续编辑都会失效）
+        const sentinelTime = fs.statSync(reviewSentinel).mtimeMs;
+        const stale = [];
+        const tolerance = 2000; // 2 秒容差，避免同秒写入误判
+        for (const f of [specPath, tasksPath, logPath]) {
+          if (!fs.existsSync(f)) continue;
+          const ft = fs.statSync(f).mtimeMs;
+          if (ft > sentinelTime + tolerance) {
+            stale.push(`${path.basename(f)}（晚于 review 通过时间 ${Math.round((ft - sentinelTime) / 1000)} 秒）`);
+          }
+        }
+        if (stale.length > 0) {
+          fail(`review 通过后下列文件被修改：${stale.join('，')} — 必须重新运行 \`gate <name> review\``);
+        } else {
+          // 读取哨兵记录的 review 时间和版本
+          try {
+            const sentinelData = JSON.parse(fs.readFileSync(reviewSentinel, 'utf-8'));
+            const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
+            log.ok(`review gate 哨兵有效（${ageMin} 分钟前通过 / framework v${sentinelData.version}）`);
+          } catch {
+            log.ok('review gate 哨兵有效');
+          }
+        }
       }
       break;
     }
@@ -854,9 +885,28 @@ function cmdGate(args) {
 
   console.log('');
   if (pass) {
+    // 成功通过 review gate → 写哨兵（其它 phase 不写）
+    if (phase === 'review') {
+      try {
+        const sentinelPath = path.join(changeDir, '.gate-review-passed');
+        fs.writeFileSync(sentinelPath, JSON.stringify({
+          timestamp: Date.now(),
+          version: readVersion(),
+        }, null, 2) + '\n');
+      } catch (e) {
+        log.warn(`写入 review 哨兵失败：${e.message}`);
+      }
+    }
     log.ok(`Gate 通过 ✓ — 可以进入 ${phase} 阶段`);
     process.exit(0);
   } else {
+    // review gate 失败 → 清除可能存在的旧哨兵，防止下次 archive 误信
+    if (phase === 'review') {
+      const sentinelPath = path.join(changeDir, '.gate-review-passed');
+      if (fs.existsSync(sentinelPath)) {
+        try { fs.unlinkSync(sentinelPath); } catch {}
+      }
+    }
     log.err(`Gate 未通过 ✗ — 无法进入 ${phase} 阶段`);
     process.exit(1);
   }
