@@ -14,28 +14,45 @@ if [[ ! -d "$ROOT_DIR/.git" ]]; then
   exit 1
 fi
 
-HOOK_FILE="$ROOT_DIR/.git/hooks/pre-commit"
+PRE_HOOK="$ROOT_DIR/.git/hooks/pre-commit"
+MSG_HOOK="$ROOT_DIR/.git/hooks/commit-msg"
 
-if [[ -f "$HOOK_FILE" ]]; then
+# pre-commit：spec-lint
+if [[ -f "$PRE_HOOK" ]]; then
   echo "⚠ 已存在 pre-commit hook，备份为 pre-commit.bak.$(date +%s)"
-  mv "$HOOK_FILE" "$HOOK_FILE.bak.$(date +%s)"
+  mv "$PRE_HOOK" "$PRE_HOOK.bak.$(date +%s)"
 fi
-
-cat > "$HOOK_FILE" <<'EOF'
+cat > "$PRE_HOOK" <<'EOF'
 #!/usr/bin/env bash
 # spec_copilot pre-commit hook
-
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 LINT="$ROOT_DIR/spec_copilot/scripts/spec-lint.sh"
-
 if [[ -x "$LINT" ]]; then
   bash "$LINT" --hook
 fi
 EOF
+chmod +x "$PRE_HOOK"
 
-chmod +x "$HOOK_FILE"
+# commit-msg：v2.1.0 引入 — 校验 task commit 必须含自评分卡
+if [[ -f "$MSG_HOOK" ]]; then
+  echo "⚠ 已存在 commit-msg hook，备份为 commit-msg.bak.$(date +%s)"
+  mv "$MSG_HOOK" "$MSG_HOOK.bak.$(date +%s)"
+fi
+cat > "$MSG_HOOK" <<'EOF'
+#!/usr/bin/env bash
+# spec_copilot commit-msg hook — 校验 task commit 必须含自评分卡
+# 跳过：git commit --no-verify
+MSG_FILE="$1"
+if ! command -v npx >/dev/null 2>&1; then
+  exit 0  # 没装 npx 静默放行（用户可能离线）
+fi
+npx --no-install @alenfitz/spec-copilot scorecard "$MSG_FILE" 2>/dev/null
+exit $?
+EOF
+chmod +x "$MSG_HOOK"
+
 chmod +x "$SCRIPT_DIR/spec-lint.sh"
 
-echo "✓ pre-commit hook 已安装到 $HOOK_FILE"
-echo "  每次 commit 前会自动跑 spec-lint，检查 changes/ 下有改动的需求"
-echo "  如需跳过：git commit --no-verify"
+echo "✓ pre-commit hook 已安装到 $PRE_HOOK"
+echo "✓ commit-msg hook 已安装到 $MSG_HOOK（校验 task commit 自评分卡）"
+echo "  跳过 hook：git commit --no-verify"

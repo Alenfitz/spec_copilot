@@ -571,6 +571,175 @@ function cmdGate(args) {
         log.warn(`前端死代码检测跳过：${e.message.split('\n')[0]}`);
       }
 
+      // ─── 反"太嗨"机制 7：前端严格检查（v2.1.0） ───
+      // 拦"前端骨架级糊弄"的系统性问题：
+      //   1. stub handler（@click 后接空函数/TODO/alert）
+      //   2. 路由覆盖（src/views 下的 .vue 必须在 router 配置中出现）
+      //   3. dialog 挂载（XxxDialog.vue 必须在某父组件里实例化）
+      //   4. API 覆盖（spec §6 声明的 API 路径必须在前端 src/api/ 中出现）
+      try {
+        const feRoots = ['app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+        if (feRoots.length > 0) {
+          const feFailures = [];
+
+          // 4.1 stub handler 检测
+          for (const root of feRoots) {
+            const vueFiles = [];
+            const walk = (dir) => {
+              if (!fs.existsSync(dir)) return;
+              for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, f.name);
+                if (f.isDirectory()) {
+                  if (!/node_modules|dist|\.git/.test(f.name)) walk(full);
+                } else if (/\.(vue|tsx|jsx)$/.test(f.name)) {
+                  vueFiles.push(full);
+                }
+              }
+            };
+            walk(path.join(projectRoot, root));
+
+            for (const file of vueFiles) {
+              const content = fs.readFileSync(file, 'utf-8');
+              // @click="handlerName" 后查 handlerName 是否是空体/TODO/alert
+              const handlerMatches = [...content.matchAll(/@click(?:\.[a-z]+)?\s*=\s*["']([a-zA-Z_$][\w$]*)["']/g)];
+              const handlerNames = [...new Set(handlerMatches.map(m => m[1]))];
+              for (const hn of handlerNames) {
+                // 找 const hn = (...) => { body } 或 function hn(...){ body } 或 method hn(){ body }
+                const fnRegex = new RegExp(
+                  `(?:const\\s+${hn}\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*\\{([\\s\\S]*?)\\}` +
+                  `|function\\s+${hn}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\}` +
+                  `|\\b${hn}\\s*\\([^)]*\\)\\s*\\{([\\s\\S]*?)\\})`
+                );
+                const fm = content.match(fnRegex);
+                if (fm) {
+                  const body = (fm[1] || fm[2] || fm[3] || '').trim();
+                  const isStub =
+                    body.length < 3 ||                          // 空体或几乎空
+                    /^\/[\/*]\s*TODO/i.test(body) ||             // 仅 TODO 注释
+                    /^console\.log\([^)]*\)\s*;?\s*$/.test(body) ||  // 仅 console.log
+                    /^alert\([^)]*\)\s*;?\s*$/.test(body) ||      // 仅 alert
+                    /^ElMessage\.(info|warning)\(['"]\s*(未实现|TODO|占位|敬请期待)['"]\)\s*;?\s*$/.test(body);
+                  if (isStub) {
+                    feFailures.push(`${path.relative(projectRoot, file)}: @click="${hn}" handler 是占位（body: "${body.slice(0, 50)}..."）`);
+                  }
+                }
+              }
+            }
+          }
+
+          // 4.2 路由覆盖检测
+          const routerCandidates = [];
+          for (const root of feRoots) {
+            for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js']) {
+              const p = path.join(projectRoot, root, name);
+              if (fs.existsSync(p)) routerCandidates.push(p);
+            }
+          }
+          if (routerCandidates.length > 0) {
+            const routerContent = routerCandidates.map(p => fs.readFileSync(p, 'utf-8')).join('\n');
+            // 找 src/views 下的所有 .vue 文件，看其 basename（去 .vue）是否在 router 内被引用
+            for (const root of feRoots) {
+              const viewsDir = path.join(projectRoot, root, 'views');
+              if (!fs.existsSync(viewsDir)) continue;
+              const collectViews = (dir, acc = []) => {
+                for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+                  const full = path.join(dir, f.name);
+                  if (f.isDirectory()) collectViews(full, acc);
+                  else if (/\.(vue|tsx|jsx)$/.test(f.name)) acc.push(full);
+                }
+                return acc;
+              };
+              const views = collectViews(viewsDir);
+              for (const v of views) {
+                const rel = path.relative(path.join(projectRoot, root), v).replace(/\\/g, '/');
+                const baseName = path.basename(v).replace(/\.(vue|tsx|jsx)$/, '');
+                // 在 router 里搜该文件路径片段（去掉 views/）或同名 import
+                const stripped = rel.replace(/^views\//, '').replace(/\.(vue|tsx|jsx)$/, '');
+                const found =
+                  routerContent.includes(stripped) ||
+                  routerContent.includes(`/${baseName}`) ||
+                  new RegExp(`from\\s+['"][^'"]*${baseName}['"]`).test(routerContent) ||
+                  // 排除子组件型 view（被父 view import 的情况）
+                  (() => {
+                    try {
+                      const r = execSync(
+                        `git grep -l "${baseName}" -- ':!${path.relative(projectRoot, v)}' ':!spec_copilot/*' ':!*.md'`,
+                        { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }
+                      ).trim();
+                      return r.split('\n').filter(Boolean).length > 0;
+                    } catch { return false; }
+                  })();
+                if (!found && !/^(index|App|main)$/i.test(baseName)) {
+                  feFailures.push(`${rel}: view 文件未在 router 中声明也未被任何文件引用（无用户路径可达）`);
+                }
+              }
+            }
+          }
+
+          // 4.3 Dialog 挂载检测
+          for (const root of feRoots) {
+            const componentsDirs = [
+              path.join(projectRoot, root, 'components'),
+              path.join(projectRoot, root, 'components', 'business'),
+            ].filter(d => fs.existsSync(d));
+            for (const cdir of componentsDirs) {
+              const dialogs = fs.readdirSync(cdir).filter(f => /Dialog\.(vue|tsx|jsx)$/.test(f));
+              for (const dlg of dialogs) {
+                const baseName = dlg.replace(/\.(vue|tsx|jsx)$/, '');
+                // 转 kebab-case 用于 template 实例化检测：<my-dialog 或 <MyDialog
+                const kebab = baseName.replace(/([A-Z])/g, (_, c, i) => (i === 0 ? c.toLowerCase() : '-' + c.toLowerCase()));
+                try {
+                  const r = execSync(
+                    `git grep -lE "<${baseName}[ />]|<${kebab}[ />]" -- ':!${path.relative(projectRoot, path.join(cdir, dlg))}' ':!spec_copilot/*' ':!*.md'`,
+                    { cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }
+                  ).trim();
+                  if (!r) {
+                    feFailures.push(`${path.relative(projectRoot, path.join(cdir, dlg))}: Dialog 未在任何父组件中实例化（即使 import 也不算挂载）`);
+                  }
+                } catch {
+                  feFailures.push(`${path.relative(projectRoot, path.join(cdir, dlg))}: Dialog 未在任何父组件中实例化`);
+                }
+              }
+            }
+          }
+
+          // 4.4 API 覆盖检测（spec §6 声明的路径是否在前端 src/api/ 中出现）
+          const apiPaths = [...new Set((specContent.match(/\/api\/[a-zA-Z][\w\-\/{}]*/g) || []))];
+          if (apiPaths.length > 0) {
+            for (const root of feRoots) {
+              const apiDir = path.join(projectRoot, root, 'api');
+              if (!fs.existsSync(apiDir)) {
+                feFailures.push(`${root}/api/ 目录不存在 — spec 声明 ${apiPaths.length} 个 API 路径但前端无 API 层`);
+                continue;
+              }
+              const apiContent = fs.readdirSync(apiDir)
+                .filter(f => /\.(ts|js)$/.test(f))
+                .map(f => fs.readFileSync(path.join(apiDir, f), 'utf-8'))
+                .join('\n');
+              const missingApis = [];
+              for (const ap of apiPaths) {
+                // 用 path 前缀做匹配（如 /api/work-ticket/list 也匹配 work-ticket/list）
+                const stem = ap.replace(/^\/api\//, '').replace(/\{[^}]+\}/g, '');
+                if (!apiContent.includes(stem) && !apiContent.includes(ap)) {
+                  missingApis.push(ap);
+                }
+              }
+              if (missingApis.length > 0) {
+                feFailures.push(`${root}/api/ 缺失 ${missingApis.length} 个 API 调用：${missingApis.slice(0, 8).join(', ')}${missingApis.length > 8 ? ' ...' : ''}`);
+              }
+            }
+          }
+
+          if (feFailures.length > 0) {
+            fail(`前端严格检查命中（${feFailures.length} 项）：\n   ${feFailures.slice(0, 20).join('\n   ')}${feFailures.length > 20 ? `\n   ... 还有 ${feFailures.length - 20} 项` : ''}`);
+          } else {
+            log.ok('前端严格检查：clean（无 stub handler / 路由覆盖完整 / dialog 挂载完整 / API 全覆盖）');
+          }
+        }
+      } catch (e) {
+        log.warn(`前端严格检查跳过：${e.message.split('\n')[0]}`);
+      }
+
       // ─── 前后端工作量均衡检查 ───
       const specMentionsFrontend = /前端|页面|组件|\.vue|Vue|React|UI 交互|界面/.test(specContent);
       if (specMentionsFrontend) {
@@ -1324,6 +1493,112 @@ function cmdUninstall(args) {
 
 // ─── 辅助 ───────────────────────────────────────────────────
 
+/**
+ * 校验 commit message 是否含必填自评分卡
+ *
+ * 用法：
+ *   npx @alenfitz/spec-copilot scorecard <commit-msg-file>
+ *   或：spec-copilot scorecard --stdin（从标准输入读 message）
+ *
+ * 仅对 feature/* 分支的 task commit 强制（chore/merge/初始 commit 跳过）。
+ *
+ * 退出码：0 = 通过；1 = 缺字段/分数过低；2 = 用法错误
+ */
+function cmdScorecard(args) {
+  let msg = '';
+  try {
+    if (args[0] === '--stdin') {
+      msg = fs.readFileSync(0, 'utf-8');
+    } else if (args[0]) {
+      msg = fs.readFileSync(args[0], 'utf-8');
+    } else {
+      log.err('用法: scorecard <commit-msg-file> | --stdin');
+      process.exit(2);
+    }
+  } catch (e) {
+    log.err(`读取 commit message 失败：${e.message}`);
+    process.exit(2);
+  }
+
+  // 跳过非 task commit（chore/merge/revert/初始化）
+  const firstLine = msg.split('\n')[0] || '';
+  const isTaskCommit = /^\[[^\]]+\]\s*T\d+:/.test(firstLine);
+  if (!isTaskCommit) {
+    // 非 task commit 也鼓励有分卡，但不强制
+    return process.exit(0);
+  }
+
+  // 必需字段（用 [^\S\n] 不包含换行的空白，避免跨行串行匹配）
+  const required = [
+    { key: '业需匹配度', regex: /业需匹配度[：:][^\S\n]*(\d+)\s*\/\s*10/ },
+    { key: '代码可投产度', regex: /代码可投产度[：:][^\S\n]*(\d+)\s*\/\s*10/ },
+    { key: '我未做但应该做的事', regex: /我未做但应该做的事[：:]([^\n]*)/ },
+    { key: '总分', regex: /给[^\S\n]*[：:]?[^\S\n]*(\d+)\s*\/\s*100/ },
+  ];
+
+  const missing = [];
+  const scores = {};
+  for (const f of required) {
+    const m = msg.match(f.regex);
+    if (!m) {
+      missing.push(f.key);
+      continue;
+    }
+    const raw = (m[1] || '').trim();
+    if (f.key === '我未做但应该做的事') {
+      // 文本字段：必须有 >= 1 个有效字符
+      if (raw.length < 1 || /^[_\-\s]+$/.test(raw)) {
+        missing.push(f.key + '（留空 / 占位符）');
+      } else {
+        scores[f.key] = raw;
+      }
+    } else if (/^\d+$/.test(raw)) {
+      scores[f.key] = parseInt(raw, 10);
+    } else {
+      missing.push(f.key + '（值非数字）');
+    }
+  }
+
+  if (missing.length > 0) {
+    console.error('');
+    log.err(`commit message 缺少自评分卡字段：${missing.join('、')}`);
+    console.error('');
+    console.error('  task commit 必须在 message 末尾附自评分卡，格式：');
+    console.error('');
+    console.error('    ## 自评分卡');
+    console.error('    - 业需匹配度：8/10（每扣 1 分必须列出具体扣分点）');
+    console.error('    - 代码可投产度：7/10');
+    console.error('    - 我未做但应该做的事：xxx（无则写"无"）');
+    console.error('    - 如果用户现在评分，给：75/100（含理由）');
+    console.error('');
+    console.error('  跳过校验（不推荐）：git commit --no-verify');
+    process.exit(1);
+  }
+
+  // 分数门槛
+  const totalScore = scores['总分'];
+  if (typeof totalScore === 'number') {
+    if (totalScore < 60) {
+      log.err(`自评总分 ${totalScore}/100 低于 60 — 当前 task 不应被 commit`);
+      console.error('  请要么改进实现，要么显式声明"接受降级"并先告知用户');
+      console.error('  跳过校验（不推荐）：git commit --no-verify');
+      process.exit(1);
+    } else if (totalScore < 70) {
+      log.warn(`自评总分 ${totalScore}/100（< 70），建议改进；commit 已放行`);
+    } else {
+      log.ok(`自评分卡：${totalScore}/100（业需 ${scores['业需匹配度']}/10 · 投产 ${scores['代码可投产度']}/10）`);
+    }
+  }
+
+  // "未做事" 留空检测（必填）
+  const todo = scores['我未做但应该做的事'];
+  if (typeof todo === 'string' && (todo.length < 1 || /^[_\-\s]+$/.test(todo))) {
+    log.err('"我未做但应该做的事" 字段不能留空（无则显式写"无"）');
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 function installGitHook(projectRoot) {
   const hookScript = path.join(projectRoot, 'spec_copilot', 'scripts', 'install-hooks.sh');
   if (!fs.existsSync(hookScript)) return;
@@ -1356,6 +1631,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
   npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
+  npx @alenfitz/spec-copilot scorecard <msg-file>        校验 task commit 自评分卡
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 
@@ -1386,6 +1662,9 @@ switch (cmd) {
     break;
   case 'agents':
     cmdAgents(args.slice(1));
+    break;
+  case 'scorecard':
+    cmdScorecard(args.slice(1));
     break;
   case 'doctor':
   case 'check':
