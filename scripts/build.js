@@ -37,11 +37,27 @@ const obfuscatorOpts = {
   transformObjectKeys: true,
 };
 
+// License header — 写在所有混淆产物顶部，保护性声明（reverse engineering / 重发布的法律红线）
+const pkgVersion = require(path.join(root, 'package.json')).version;
+const LICENSE_HEADER = `/*!
+ * @alenfitz/spec-copilot v${pkgVersion}
+ * Copyright (c) ${new Date().getFullYear()} alenfitz. All rights reserved.
+ *
+ * This file is proprietary and obfuscated. Reverse engineering, decompilation,
+ * disassembly, or unauthorized redistribution of any kind is strictly prohibited.
+ * Source code is NOT licensed under MIT/Apache and is NOT available for derivative work.
+ *
+ * Bugs / feature requests: https://github.com/Alenfitz/spec_copilit/issues
+ */
+`;
+
 function obfuscateFile(srcPath, destPath) {
   const code = fs.readFileSync(srcPath, 'utf-8');
   const result = JavaScriptObfuscator.obfuscate(code, obfuscatorOpts);
+  // obfuscator 可能保留 shebang 在输出顶部 — 先剥掉，shebang restore 步骤统一处理
+  const obfuscated = result.getObfuscatedCode().replace(/^#!.*\n/, '');
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  fs.writeFileSync(destPath, result.getObfuscatedCode(), 'utf-8');
+  fs.writeFileSync(destPath, LICENSE_HEADER + obfuscated, 'utf-8');
 }
 
 function copyDir(src, dest) {
@@ -63,7 +79,7 @@ console.log('Obfuscating JS...');
 obfuscateFile(path.join(root, 'bin', 'cli.js'), path.join(dist, 'bin', 'cli.js'));
 obfuscateFile(path.join(root, 'adapters', 'index.js'), path.join(dist, 'adapters', 'index.js'));
 
-// Restore shebang (obfuscator strips it, and selfDefending injects before it)
+// Restore shebang at top（必须是文件第一行，license header 移到 shebang 之后）
 {
   const cliPath = path.join(dist, 'bin', 'cli.js');
   let content = fs.readFileSync(cliPath, 'utf-8');
