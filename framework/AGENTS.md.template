@@ -159,7 +159,7 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 | 门禁 | 检查项 | 失败时阻止进入 |
 |------|--------|-------------|
 | `apply` | spec.md 存在 + §9 清空 +（🔴）tasks.md 存在 + **前后端 task 交织度** + **前端 task 粒度上限** | /spec:apply |
-| `smoke` | **前后端构建验证** + **骨架组件检测** + TypeScript any 检测 + **E2E 浏览器冒烟**（需 Playwright） | /spec:smoke |
+| `smoke` | **前后端构建验证** + **骨架组件检测** + TypeScript any 检测 + **E2E 双引擎浏览器冒烟** | /spec:smoke |
 | `review` | smoke 哨兵 + 冒烟记录 + 所有 task 已提交 + **骨架组件检测** + **前端 task 功能性自证** | /spec:review |
 | `test` | 🔴 复杂需求强制进入 | /spec:test |
 | `archive` | spec.md §12 审查结论为通过 + review 哨兵 | /spec:archive |
@@ -176,6 +176,12 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 - Spec-driven 路由提取：从 spec.md + router 文件自动生成测试页面列表
 - 内置 playwright-core，使用系统 Chrome，用户无需额外安装任何依赖
 - 未找到系统 Chrome 时自动跳过（warning 级别）
+
+**v2.4.0 双引擎 E2E + opencli 集成**（解决"登录态页面无法自动测试"）：
+- 双引擎架构：opencli/CDP 引擎（已登录 Chrome）+ playwright-core 引擎（headless），自动切换
+- auto 模式：先用 playwright 跑全量 → 登录重定向的页面自动通过 CDP 引擎重试
+- `--engine auto|playwright|opencli` 选择引擎
+- 安装 `@jackwener/opencli` 后启动 `chrome --remote-debugging-port=9222` 即可测试认证页面
 
 ## Git 规范
 1. 禁止 master/main 分支直接变更，/spec:apply 开始前必须建 feature 分支

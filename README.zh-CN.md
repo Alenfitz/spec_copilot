@@ -103,20 +103,22 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 | 门禁 | 检查项 |
 |------|--------|
 | `apply` | Spec 完整性 + 前后端 task 交织度 + 前端 task 粒度 |
-| `smoke` | **构建验证** + **骨架检测** + TS any 泛滥 + **E2E 浏览器冒烟** |
+| `smoke` | **构建验证** + **骨架检测** + TS any 泛滥 + **双引擎 E2E 浏览器冒烟** |
 | `review` | smoke 哨兵 + 功能点覆盖 + 死代码 + stub handler + 嗨语言 |
 | `archive` | review 哨兵 + spec 审查结论 |
 
-### E2E 浏览器冒烟（v2.3.0）
+### E2E 浏览器冒烟（v2.3.0 + 双引擎 v2.4.0）
 
-基于 Playwright 的端到端浏览器验证 — 抓住"能编译但不能用"的问题：
+双引擎端到端浏览器验证 — 抓住"能编译但不能用"的问题：
 
 - **自动检测**技术栈（Spring Boot + Vue3、Vite 等）并启动开发服务器
 - **Spec 驱动**路由提取：从 spec.md + 项目 router 文件自动生成测试页面
 - **逐页面检查**：白屏、未捕获 JS 异常、API 连接失败、框架错误遮罩
-- **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
+- **双引擎**：playwright-core（headless, CI 友好）+ opencli/CDP（已登录 Chrome，可测认证页面）
+- **auto 模式**：playwright 跑全量 → 登录重定向页面自动通过 CDP 引擎重试
+- **零配置**适配常见栈，flags：`--headed`、`--base-url`、`--engine auto|playwright|opencli`、`--no-e2e`
 
-使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
+使用系统已安装的 Chrome — 无需额外安装。可选：`npm i -g @jackwener/opencli` + `chrome --remote-debugging-port=9222` 测试认证页面。
 
 ## 复杂度分级
 
