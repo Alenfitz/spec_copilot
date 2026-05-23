@@ -1267,6 +1267,12 @@ async function cmdGate(args) {
         log.warn(`写入 ${phase} 哨兵失败：${e.message}`);
       }
     }
+    // guard 集成：gate 通过后自动锁定 spec.md
+    try {
+      const guard = require('./guard');
+      guard.onGatePassed(projectRoot, changeName, phase);
+    } catch { /* guard 未安装时静默跳过 */ }
+
     log.ok(`Gate 通过 ✓ — 可以进入 ${phase} 阶段`);
     process.exit(0);
   } else {
@@ -1434,6 +1440,56 @@ function installAgentsForAdapter(adapter, srcRoot, projectRoot) {
   }
 }
 
+// ─── Guard ──────────────────────────────────────────────────
+
+function cmdGuard(args) {
+  const guard = require('./guard');
+  const projectRoot = findProjectRoot();
+  const sub = args[0];
+
+  switch (sub) {
+    case 'install':
+      guard.cmdGuardInstall(projectRoot);
+      break;
+    case 'status':
+      guard.cmdGuardStatus(projectRoot);
+      break;
+    case 'lock':
+      guard.cmdGuardLock(projectRoot, args.slice(1));
+      break;
+    case 'unlock':
+      guard.cmdGuardUnlock(projectRoot, args.slice(1));
+      break;
+    case 'check': {
+      const isHook = args.includes('--hook');
+      const pass = guard.cmdGuardCheck(projectRoot, isHook);
+      process.exit(pass ? 0 : 1);
+      break;
+    }
+    default:
+      console.log(`
+spec-copilot guard — 代码级护栏（AI 工具绕不过的硬拦截）
+
+用法:
+  spec-copilot guard install          安装 pre-commit hook + 初始化配置
+  spec-copilot guard status           查看保护状态
+  spec-copilot guard lock [<file>]    锁定文件（无参数 = 自动按阶段锁定）
+  spec-copilot guard unlock <file>    解锁文件
+  spec-copilot guard check [--hook]   运行检查（hook 自动调用）
+
+原理:
+  git pre-commit hook 在每次提交时自动检查：
+  1. 被保护的文件（spec.md / domain-rules.md）是否被修改
+  2. 相位门禁是否满足（smoke 通过才能 review）
+  3. 骨架组件是否混入提交
+
+  AI 工具可以忽略提示词，但绕不过 git hook。
+  人类紧急操作：git commit --no-verify
+`);
+      break;
+  }
+}
+
 // ─── Doctor ─────────────────────────────────────────────────
 
 function cmdDoctor() {
@@ -1591,6 +1647,21 @@ function cmdDoctor() {
     }
   } catch {
     log.info('E2E 检查跳过');
+  }
+
+  // 检查 guard 护栏状态
+  try {
+    const guard = require('./guard');
+    const hookPath = path.join(projectRoot, '.git', 'hooks', 'pre-commit');
+    if (fs.existsSync(hookPath) && fs.readFileSync(hookPath, 'utf-8').includes('spec-copilot guard')) {
+      const locks = guard.readLocks(projectRoot);
+      const lockedCount = Object.values(locks.files).filter(v => v.locked && !v.unlocked).length;
+      log.ok(`Guard 护栏已启用（${lockedCount} 个文件锁定中）`);
+    } else {
+      log.info('Guard 护栏未安装（运行 spec-copilot guard install 启用代码级保护）');
+    }
+  } catch {
+    log.info('Guard 检查跳过');
   }
 
   console.log('');
@@ -1850,6 +1921,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
   npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
   npx @alenfitz/spec-copilot scorecard <msg-file>        校验 task commit 自评分卡
+  npx @alenfitz/spec-copilot guard <install|status|lock|unlock|check>  代码级护栏
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 
@@ -1883,6 +1955,9 @@ switch (cmd) {
     break;
   case 'scorecard':
     cmdScorecard(args.slice(1));
+    break;
+  case 'guard':
+    cmdGuard(args.slice(1));
     break;
   case 'doctor':
   case 'check':

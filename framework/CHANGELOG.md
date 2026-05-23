@@ -4,6 +4,36 @@
 
 ---
 
+## [2.5.0] - 2026-05-23
+
+### 新增
+
+**Guard 代码级护栏系统 — "提示词是建议，代码是法律"**
+
+核心问题：AI 工具不遵守 AGENTS.md 中的铁律（说改 spec.md 就改了，说跳过 smoke 就跳了）。
+Guard 把关键约束从提示词搬到 git pre-commit hook，所有 AI 工具通用。
+
+- **`spec-copilot guard install`**：安装 pre-commit hook + 初始化保护配置
+- **`spec-copilot guard status`**：查看当前保护状态（锁定文件列表、hook 安装状态）
+- **`spec-copilot guard lock [file]`**：手动锁定文件（无参数 = 按阶段自动锁定）
+- **`spec-copilot guard unlock <file>`**：解锁文件（仅限人类操作）
+- **`spec-copilot guard check`**：运行检查（hook 自动调用）
+
+pre-commit hook 自动拦截三类违规：
+1. **文件保护**：spec.md 审批后锁定、domain-rules.md / project-context.md 永久保护
+2. **相位门禁**：没有 smoke 哨兵不能提交 review 变更
+3. **骨架组件**：.vue 文件只有占位组件或 TODO 不能提交
+
+Gate 集成：`gate <name> smoke/apply` 通过后自动锁定 spec.md（写入 `.spec-copilot/locks.json`）。
+
+**所有 AI 工具通用**：Claude Code / Cursor / Windsurf / Copilot / Cline / opencode。
+人类紧急操作：`git commit --no-verify`。
+
+- `doctor` 命令显示 Guard 护栏状态
+- `.spec-copilot/guard.json` 声明式配置（可自定义保护规则）
+
+---
+
 ## [2.4.1] - 2026-05-23
 
 ### 变更
