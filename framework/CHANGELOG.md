@@ -4,6 +4,18 @@
 
 ---
 
+## [2.3.1] - 2026-05-23
+
+### 变更
+
+- **E2E 浏览器依赖简化**：改用 `playwright-core`（12MB）+ 系统 Chrome，用户无需在目标项目安装任何依赖
+- 自动检测 macOS / Linux / Windows 上的 Chrome/Chromium 安装路径
+- `doctor` 命令显示 Chrome 检测路径和 E2E 就绪状态
+- API 健康检查支持 Vite proxy 回退：优先通过前端端口检查 → 失败回退直连后端端口
+- 更新 README / CHANGELOG / AGENTS.md.template / spec:smoke.md 文档
+
+---
+
 ## [2.3.0] - 2026-05-23
 
 ### 新增
@@ -37,15 +49,11 @@
 > 根因：curl 200 ≠ 前后端对齐。camelCase/snake_case 不匹配、响应结构错位、子表不持久化 —— 这些"接缝"问题在组件级测试中完全不可见。
 > v2.3.0 核心突破：**用真实浏览器跑真实页面，让 smoke gate 验证"用户能不能用"而不仅仅是"代码能不能编译"**。
 
-### Playwright 安装
+### 浏览器依赖
 
-Playwright 是目标项目的可选依赖，spec-copilot 本身不包含 Playwright：
-
-```bash
-cd <frontend-dir> && npm i -D playwright && npx playwright install chromium
-```
-
-未安装时 E2E 检查自动跳过（warning 级别），不影响其他 smoke 检查。
+spec-copilot 内置 `playwright-core`（~12MB），运行时连接系统已安装的 Chrome/Chromium。
+用户无需在目标项目安装任何额外依赖，只要电脑有 Chrome 即可。
+未找到 Chrome 时 E2E 检查自动跳过（warning 级别），不影响其他 smoke 检查。
 
 ---
 

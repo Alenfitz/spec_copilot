@@ -89,31 +89,94 @@ const STACK_PROFILES = [
 // ─── Playwright 发现 ─────────────────────────────────────────
 
 /**
- * 在目标项目的 node_modules 中查找 playwright
- * @returns {{ chromium: object, module: object }|null}
+ * 查找可用的 Chrome/Chromium 浏览器路径
+ * @returns {string|null}
  */
-function resolvePlaywright(projectRoot) {
-  const searchPaths = [
-    projectRoot,
-    path.join(projectRoot, 'frontend'),
-    path.join(projectRoot, 'app'),
-  ].filter(p => fs.existsSync(p));
+function findSystemChrome() {
+  const platform = process.platform;
+  const candidates = [];
 
-  for (const base of searchPaths) {
-    try {
-      const resolved = require.resolve('playwright', { paths: [base] });
-      const pw = require(resolved);
-      if (pw && pw.chromium) return { chromium: pw.chromium, module: pw };
-    } catch { /* continue */ }
-
-    try {
-      const resolved = require.resolve('playwright-core', { paths: [base] });
-      const pw = require(resolved);
-      if (pw && pw.chromium) return { chromium: pw.chromium, module: pw };
-    } catch { /* continue */ }
+  if (platform === 'darwin') {
+    candidates.push(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      `${process.env.HOME}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+    );
+  } else if (platform === 'linux') {
+    candidates.push(
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium',
+    );
+  } else if (platform === 'win32') {
+    const programFiles = process.env['PROGRAMFILES'] || 'C:\\Program Files';
+    const programFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+    const localAppData = process.env.LOCALAPPDATA || '';
+    candidates.push(
+      `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${programFilesX86}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`,
+    );
   }
 
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
   return null;
+}
+
+/**
+ * 加载 playwright-core（spec-copilot 自带）并定位系统 Chrome
+ * @returns {{ chromium: object, module: object, launchOptions: object }|null}
+ */
+function resolvePlaywright(projectRoot) {
+  // 1. 尝试加载 playwright-core（spec-copilot 自带依赖）
+  let pw = null;
+  try {
+    pw = require('playwright-core');
+  } catch {
+    // 回退：从目标项目查找完整 playwright
+    const searchPaths = [
+      projectRoot,
+      path.join(projectRoot, 'frontend'),
+      path.join(projectRoot, 'app'),
+    ].filter(p => fs.existsSync(p));
+
+    for (const base of searchPaths) {
+      try {
+        const resolved = require.resolve('playwright', { paths: [base] });
+        pw = require(resolved);
+        if (pw && pw.chromium) return { chromium: pw.chromium, module: pw, launchOptions: {} };
+      } catch { /* continue */ }
+    }
+    return null;
+  }
+
+  if (!pw || !pw.chromium) return null;
+
+  // 2. 确定浏览器来源
+  //    优先 channel: 'chrome'（系统已安装的 Chrome）
+  //    回退：显式 executablePath
+  const systemChrome = findSystemChrome();
+  if (systemChrome) {
+    return {
+      chromium: pw.chromium,
+      module: pw,
+      launchOptions: { channel: 'chrome' },
+      browserPath: systemChrome,
+    };
+  }
+
+  // 3. 没找到系统 Chrome
+  return {
+    chromium: pw.chromium,
+    module: pw,
+    launchOptions: null, // 标记为找不到浏览器
+    browserPath: null,
+  };
 }
 
 // ─── 端口探测 ────────────────────────────────────────────────
@@ -607,14 +670,29 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
     skipApis = false,
   } = options;
 
-  // ── Step 1：发现 Playwright ──
+  // ── Step 1：发现 Playwright + 浏览器 ──
   const pw = resolvePlaywright(projectRoot);
   if (!pw) {
     return {
       available: false,
       pass: undefined,
-      skipReason: '目标项目未安装 Playwright',
-      installHint: 'cd <frontend-dir> && npm i -D playwright && npx playwright install chromium',
+      skipReason: 'playwright-core 加载失败（spec-copilot 安装可能不完整）',
+      pages: [],
+      apiResults: [],
+      consoleErrors: [],
+      servers: {},
+    };
+  }
+  if (pw.launchOptions === null) {
+    return {
+      available: false,
+      pass: undefined,
+      skipReason: '未找到系统 Chrome/Chromium 浏览器',
+      installHint: process.platform === 'darwin'
+        ? '安装 Chrome: https://www.google.com/chrome/ 或 brew install --cask google-chrome'
+        : process.platform === 'linux'
+        ? '安装 Chrome: sudo apt install google-chrome-stable 或 sudo snap install chromium'
+        : '安装 Chrome: https://www.google.com/chrome/',
       pages: [],
       apiResults: [],
       consoleErrors: [],
@@ -752,8 +830,9 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
     let browser;
     try {
       browser = await pw.chromium.launch({
+        ...pw.launchOptions,
         headless: !headed,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
       });
 
       const context = await browser.newContext({

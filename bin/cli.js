@@ -551,7 +551,7 @@ async function cmdGate(args) {
 
           if (!e2eResult.available) {
             log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
-            log.info('  安装方法：cd <frontend-dir> && npm i -D playwright && npx playwright install chromium');
+            if (e2eResult.installHint) log.info(`  ${e2eResult.installHint}`);
           } else if (e2eResult.startupError) {
             fail(`E2E 服务器启动失败：${e2eResult.startupError}`);
           } else if (e2eResult.skipReason) {
@@ -1577,18 +1577,20 @@ function cmdDoctor() {
     }
   }
 
-  // 检查 Playwright（信息性，非必须）
+  // 检查 E2E 浏览器冒烟就绪状态
   try {
     const { resolvePlaywright } = require('./e2e-smoke');
     const pw = resolvePlaywright(projectRoot);
-    if (pw) {
-      log.ok('Playwright 已安装（E2E 浏览器冒烟可用）');
+    if (pw && pw.launchOptions) {
+      log.ok(`E2E 浏览器冒烟就绪（playwright-core + 系统 Chrome${pw.browserPath ? ': ' + pw.browserPath : ''}）`);
+    } else if (pw && pw.launchOptions === null) {
+      log.warn('E2E 浏览器冒烟不可用：未找到系统 Chrome/Chromium');
+      log.info('  安装 Chrome: https://www.google.com/chrome/');
     } else {
-      log.info('Playwright 未安装（E2E 浏览器冒烟不可用 — 可选）');
-      log.info('  安装：cd <frontend-dir> && npm i -D playwright && npx playwright install chromium');
+      log.warn('E2E 浏览器冒烟不可用：playwright-core 未加载');
     }
   } catch {
-    log.info('Playwright 检查跳过');
+    log.info('E2E 检查跳过');
   }
 
   console.log('');

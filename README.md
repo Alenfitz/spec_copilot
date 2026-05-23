@@ -115,10 +115,7 @@ Playwright-based end-to-end verification — catches "compiles but doesn't work"
 - **Checks per page**: white screen, uncaught JS errors, API failures, framework error overlays
 - **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
 
-```bash
-# Install Playwright in your project (optional, E2E skips gracefully if missing)
-cd frontend && npm i -D playwright && npx playwright install chromium
-```
+Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
 
 ## Complexity Tiers
 

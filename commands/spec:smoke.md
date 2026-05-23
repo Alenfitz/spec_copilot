@@ -20,9 +20,9 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 - 前后端构建验证（npm run build / mvn compile）
 - 骨架组件检测（el-empty / TODO-only / 空壳组件）
 - TypeScript any 泛滥检测（warning 级别）
-- **E2E 浏览器冒烟**（v2.3.0 新增，需目标项目安装 Playwright）：
+- **E2E 浏览器冒烟**（v2.3.0 新增，使用系统 Chrome，无需额外安装）：
   - 自动启动/检测前后端开发服务器
-  - 从 spec.md 提取页面路由，用 headless Chromium 逐页面检查
+  - 从 spec.md 提取页面路由，用 headless Chrome 逐页面检查
   - 检查项：白屏、JS 异常、API 连接失败、5xx 响应、框架错误遮罩
   - 完成后自动关闭启动的服务器
 
@@ -34,8 +34,7 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 
 **gate 未通过 → 直接进入 /spec:fix，不执行后续步骤。**
 
-> 💡 E2E 需要 Playwright：`cd <frontend-dir> && npm i -D playwright && npx playwright install chromium`
-> 未安装时 E2E 自动跳过（不阻断），但强烈建议安装以获得真实浏览器验证。
+> 💡 E2E 使用系统已安装的 Chrome，电脑有 Chrome 即可，无需额外安装。未找到 Chrome 时自动跳过（不阻断）。
 
 ### Step 1：接口冒烟
 

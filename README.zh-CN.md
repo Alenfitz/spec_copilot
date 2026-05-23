@@ -116,10 +116,7 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 - **逐页面检查**：白屏、未捕获 JS 异常、API 连接失败、框架错误遮罩
 - **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
 
-```bash
-# 在你的项目中安装 Playwright（可选，未安装时 E2E 自动跳过）
-cd frontend && npm i -D playwright && npx playwright install chromium
-```
+使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
 
 ## 复杂度分级
 
