@@ -117,23 +117,24 @@ Playwright-based end-to-end verification — catches "compiles but doesn't work"
 
 Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
 
-### Guard System (v2.5.0) — Code-Enforced Guardrails
+### Guard System (v2.6.0) — Code-Enforced Guardrails
 
-AI tools ignore prompt-based rules. Guard moves critical constraints into git pre-commit hooks that **no AI tool can bypass**:
+AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:
 
 ```bash
-npx @alenfitz/spec-copilot guard install    # Install pre-commit hook
-npx @alenfitz/spec-copilot guard status     # View protection status
-npx @alenfitz/spec-copilot guard lock       # Lock files by phase
+npx @alenfitz/spec-copilot guard install    # Initialize protection (record hashes)
+npx @alenfitz/spec-copilot guard status     # View protection & integrity status
+npx @alenfitz/spec-copilot guard lock       # Lock files (record hash, auto by phase)
+npx @alenfitz/spec-copilot guard unlock     # Human unlock (clear hash record)
 ```
 
-**What the hook blocks:**
+**Gate blocks when protected files are tampered:**
 - ❌ Modifying `spec.md` after approval (auto-locked when gate passes)
 - ❌ Modifying `domain-rules.md` / `project-context.md` (permanently protected)
-- ❌ Committing skeleton `.vue` components (placeholder-only)
-- ❌ Skipping smoke gate before review
+- ❌ Committing skeleton `.vue` components (optional git hook)
 
-Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, opencode. Human emergency override: `git commit --no-verify`.
+**Zero dependencies**: no git, no chmod, no special permissions. Works on all platforms.
+Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, opencode. Human unlock: `spec-copilot guard unlock <file>`.
 
 ## Complexity Tiers
 

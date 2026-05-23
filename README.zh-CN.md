@@ -118,24 +118,25 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 
 使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
 
-### Guard 代码级护栏（v2.5.0）
+### Guard 代码级护栏（v2.6.0）
 
-AI 工具会无视提示词中的"铁律"。Guard 把关键约束搬到 git pre-commit hook，**所有 AI 工具绕不过**：
+AI 工具会无视提示词中的"铁律"。Guard 用 **hash 校验 @ gate 时** 做硬拦截 — AI 可以改文件，但改了过不了 gate：
 
 ```bash
-npx @alenfitz/spec-copilot guard install    # 安装 pre-commit hook
-npx @alenfitz/spec-copilot guard status     # 查看保护状态
-npx @alenfitz/spec-copilot guard lock       # 按阶段锁定文件
+npx @alenfitz/spec-copilot guard install    # 初始化保护（记录 hash）
+npx @alenfitz/spec-copilot guard status     # 查看保护状态与完整性
+npx @alenfitz/spec-copilot guard lock       # 锁定文件（记录 hash，按阶段自动锁定）
+npx @alenfitz/spec-copilot guard unlock     # 人类解锁（清除 hash 记录）
 ```
 
-**Hook 自动拦截：**
+**Gate 拦截被保护文件篡改：**
 - ❌ 审批后修改 `spec.md`（gate 通过后自动锁定）
 - ❌ 修改 `domain-rules.md` / `project-context.md`（永久保护）
-- ❌ 提交骨架 `.vue` 组件（仅占位符）
-- ❌ 跳过 smoke 直接 review
+- ❌ 提交骨架 `.vue` 组件（可选 git hook）
 
+**零依赖**：不需要 git / chmod / 特殊权限，所有平台通用。
 **所有 AI 工具通用**：Claude Code / Cursor / Windsurf / Copilot / Cline / opencode。
-人类紧急操作：`git commit --no-verify`。
+人类解锁：`spec-copilot guard unlock <文件>`。
 
 ## 复杂度分级
 

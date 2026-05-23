@@ -407,6 +407,27 @@ async function cmdGate(args) {
 
   log.title(`Gate 检查: ${changeName} → ${phase}`);
 
+  // ── guard 硬拦截：hash 校验 ──
+  // 如果被保护文件被修改，gate 直接失败，不再执行后续检查
+  try {
+    const guard = require('./guard');
+    const integrity = guard.onGateCheck(projectRoot);
+    if (!integrity.pass) {
+      console.log('');
+      console.log('🛑 spec-copilot guard 拦截 — 被保护文件完整性校验失败');
+      console.log('─'.repeat(50));
+      for (const v of integrity.violations) {
+        console.log(`  ❌ ${v.file}`);
+        console.log(`     ${v.reason}`);
+        console.log(`     期望 hash: ${v.expected}  实际: ${v.actual}`);
+        console.log('');
+      }
+      console.log('💡 如需合法修改，人类先运行: spec-copilot guard unlock <文件>');
+      console.log('');
+      process.exit(1);
+    }
+  } catch { /* guard 未安装时静默跳过 */ }
+
   let pass = true;
   const fail = (msg) => { log.err(msg); pass = false; };
 
@@ -1471,19 +1492,20 @@ function cmdGuard(args) {
 spec-copilot guard — 代码级护栏（AI 工具绕不过的硬拦截）
 
 用法:
-  spec-copilot guard install          初始化保护（chmod + git hook）
-  spec-copilot guard status           查看保护状态
-  spec-copilot guard lock [<file>]    锁定文件为只读（无参数 = 自动按阶段锁定）
-  spec-copilot guard unlock <file>    解锁文件为可写
+  spec-copilot guard install          初始化保护（记录 hash + 可选 git hook）
+  spec-copilot guard status           查看保护状态与完整性
+  spec-copilot guard lock [<file>]    锁定文件（记录 hash，无参数 = 自动按阶段锁定）
+  spec-copilot guard unlock <file>    解锁文件（清除 hash 记录）
   spec-copilot guard check [--hook]   运行完整性检查
 
 原理:
-  主防线（不依赖 Git）：
-    chmod 444 — 被保护文件设为操作系统级只读
-    AI 工具调 write/edit → OS 直接拒绝 → 文件根本改不了
+  主防线（不依赖 Git / chmod / 特殊权限）：
+    锁定文件时记录 sha256 hash
+    gate 运行时校验 hash — 不一致 → gate 拒绝通过
+    AI 可以改文件，但改了过不了 gate — 等于白改
 
   附加层（有 Git 时自动启用）：
-    pre-commit hook — 骨架组件检测 + 相位门禁
+    pre-commit hook — 骨架组件检测
 
   人类解锁：spec-copilot guard unlock <文件>
 `);
@@ -1653,11 +1675,16 @@ function cmdDoctor() {
   // 检查 guard 护栏状态
   try {
     const guard = require('./guard');
-    const hookPath = path.join(projectRoot, '.git', 'hooks', 'pre-commit');
-    if (fs.existsSync(hookPath) && fs.readFileSync(hookPath, 'utf-8').includes('spec-copilot guard')) {
+    const configPath = path.join(projectRoot, '.spec-copilot', 'guard.json');
+    if (fs.existsSync(configPath)) {
       const locks = guard.readLocks(projectRoot);
-      const lockedCount = Object.values(locks.files).filter(v => v.locked && !v.unlocked).length;
-      log.ok(`Guard 护栏已启用（${lockedCount} 个文件锁定中）`);
+      const lockedCount = Object.keys(locks.files).length;
+      const integrity = guard.verifyIntegrity(projectRoot);
+      if (integrity.pass) {
+        log.ok(`Guard 护栏已启用（${lockedCount} 个文件锁定，hash 完整）`);
+      } else {
+        log.warn(`Guard 护栏已启用（${lockedCount} 个文件锁定，${integrity.violations.length} 个完整性异常）`);
+      }
     } else {
       log.info('Guard 护栏未安装（运行 spec-copilot guard install 启用代码级保护）');
     }

@@ -177,12 +177,12 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 - 内置 playwright-core，使用系统 Chrome，用户无需额外安装任何依赖
 - 未找到系统 Chrome 时自动跳过（warning 级别）
 
-**v2.5.0 Guard 代码级护栏**（解决"AI 不遵守提示词铁律"）：
-- **主防线：chmod 444** — 被保护文件设为操作系统级只读，write/edit 直接被 OS 拒绝
-- **附加层：git hook** — 骨架组件拦截 + 相位门禁（有 git 时自动启用）
-- gate 通过后自动锁定 spec.md（chmod 444 + `.spec-copilot/locks.json`）
-- 不依赖 git — chmod 在任何项目中都能工作
-- **⚠️ 注意：你（AI）无法 chmod 解锁文件或使用 `--no-verify`。这是设计意图。**
+**v2.6.0 Guard 代码级护栏**（解决"AI 不遵守提示词铁律"）：
+- **主防线：hash 校验 @ gate 时** — 锁定文件记录 sha256 hash，gate 运行时校验，不一致 = gate 直接失败
+- **效果**：AI 可以改文件，但改了过不了 gate — 等于白改
+- gate 通过后自动锁定 spec.md（hash 记录在 `.spec-copilot/locks.json`）
+- 不依赖 git / chmod / 特殊权限 — 所有平台 / 所有 AI 工具通用
+- **⚠️ 注意：你（AI）无法绕过 gate 的 hash 校验。被保护文件被修改 = gate 失败。这是设计意图。**
 
 ## Git 规范
 1. 禁止 master/main 分支直接变更，/spec:apply 开始前必须建 feature 分支
