@@ -1004,6 +1004,247 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     // 静默
   }
 
+  // ── 5. 表单提交测试（v2.9.0）──
+  // 找到新增/创建按钮 → 点击打开表单 → 填写测试数据 → 提交 → 检查 POST/PUT 请求
+  try {
+    // 5a. 检测是否有可点击的新增按钮（复用 check 3 的结果）
+    const formTestInfo = await page.evaluate(() => {
+      const btnTexts = ['新增', '新建', '添加', '创建', 'Add', 'Create', 'New', '+ 新增', '＋新增'];
+      const allBtns = document.querySelectorAll('button, .el-button, .ant-btn, a.btn');
+      for (const btn of allBtns) {
+        const text = (btn.textContent || '').trim();
+        if (btnTexts.some(t => text.includes(t)) && btn.offsetParent !== null && !btn.disabled && !btn.classList.contains('is-disabled')) {
+          return { found: true, text: text.slice(0, 30) };
+        }
+      }
+      return { found: false };
+    });
+
+    if (formTestInfo.found) {
+      const formApiCalls = [];
+      const onFormResponse = (res) => {
+        if (res.url().includes('/api/')) {
+          formApiCalls.push({
+            method: res.request().method(),
+            url: res.url(),
+            status: res.status(),
+          });
+        }
+      };
+      page.on('response', onFormResponse);
+
+      try {
+        // 点击新增按钮
+        const clicked = await page.evaluate((btnTexts) => {
+          const allBtns = document.querySelectorAll('button, .el-button, .ant-btn, a.btn');
+          for (const btn of allBtns) {
+            const text = (btn.textContent || '').trim();
+            if (btnTexts.some(t => text.includes(t)) && btn.offsetParent !== null && !btn.disabled) {
+              btn.click();
+              return true;
+            }
+          }
+          return false;
+        }, ['新增', '新建', '添加', '创建', 'Add', 'Create', 'New', '+ 新增', '＋新增']);
+
+        if (clicked) {
+          await page.waitForTimeout(1500);
+
+          // 5b. 检测是否弹出了表单（dialog/drawer/新页面）
+          const formInfo = await page.evaluate(() => {
+            // 检测弹窗/抽屉
+            const dialogSelectors = [
+              '.el-dialog:not([style*="display: none"])',
+              '.el-drawer:not([style*="display: none"])',
+              '.ant-modal:not([style*="display: none"])',
+              '.ant-drawer:not([style*="display: none"])',
+              '.modal.show', '.modal.fade.show',
+              '[role="dialog"]:not([style*="display: none"])',
+            ];
+            let formContainer = null;
+            for (const sel of dialogSelectors) {
+              const el = document.querySelector(sel);
+              if (el && el.offsetParent !== null) {
+                formContainer = el;
+                break;
+              }
+            }
+
+            // 如果没有弹窗，检查页面上是否新出现了表单
+            if (!formContainer) {
+              const forms = document.querySelectorAll('form, .el-form, .ant-form');
+              for (const f of forms) {
+                if (f.offsetParent !== null) { formContainer = f; break; }
+              }
+            }
+
+            if (!formContainer) return { found: false };
+
+            // 收集可填写的输入框
+            const inputs = formContainer.querySelectorAll(
+              'input[type="text"], input[type="number"], input[type="email"], input[type="tel"], ' +
+              'input:not([type]), textarea, ' +
+              '.el-input__inner, .ant-input'
+            );
+            const visibleInputs = [];
+            inputs.forEach(input => {
+              if (input.offsetParent !== null && !input.disabled && !input.readOnly) {
+                visibleInputs.push({
+                  tag: input.tagName.toLowerCase(),
+                  type: input.type || 'text',
+                  placeholder: (input.placeholder || '').slice(0, 50),
+                  name: input.name || '',
+                  id: input.id || '',
+                });
+              }
+            });
+
+            // 查找提交按钮
+            const submitTexts = ['确定', '保存', '提交', '确认', 'OK', 'Save', 'Submit', 'Confirm'];
+            const allBtns = formContainer.querySelectorAll('button, .el-button, .ant-btn');
+            let submitBtn = null;
+            allBtns.forEach(btn => {
+              const text = (btn.textContent || '').trim();
+              if (submitTexts.some(t => text.includes(t)) && btn.offsetParent !== null) {
+                submitBtn = { text: text.slice(0, 20) };
+              }
+            });
+
+            return {
+              found: true,
+              inputCount: visibleInputs.length,
+              inputs: visibleInputs.slice(0, 10),
+              hasSubmitBtn: !!submitBtn,
+              submitBtnText: submitBtn ? submitBtn.text : null,
+            };
+          });
+
+          if (formInfo.found && formInfo.inputCount > 0) {
+            // 5c. 填写测试数据
+            const testData = {
+              text: '测试数据',
+              number: '100',
+              email: 'test@example.com',
+              tel: '13800138000',
+            };
+
+            await page.evaluate((inputs, testData) => {
+              const container = document.querySelector(
+                '.el-dialog:not([style*="display: none"]), .el-drawer:not([style*="display: none"]), ' +
+                '.ant-modal:not([style*="display: none"]), .ant-drawer:not([style*="display: none"]), ' +
+                '[role="dialog"]:not([style*="display: none"]), form, .el-form, .ant-form'
+              );
+              if (!container) return;
+
+              const allInputs = container.querySelectorAll(
+                'input[type="text"], input[type="number"], input[type="email"], input[type="tel"], ' +
+                'input:not([type]), textarea, .el-input__inner, .ant-input'
+              );
+
+              allInputs.forEach(input => {
+                if (input.offsetParent === null || input.disabled || input.readOnly) return;
+                const type = input.type || 'text';
+                const value = testData[type] || testData.text;
+
+                // 用 native input setter 触发 Vue/React 响应
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype, 'value'
+                ).set;
+                nativeInputValueSetter.call(input, value);
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+              });
+            }, formInfo.inputs, testData);
+
+            await page.waitForTimeout(500);
+
+            // 5d. 点击提交按钮
+            if (formInfo.hasSubmitBtn) {
+              formApiCalls.length = 0; // 清除之前打开表单时的 API 调用
+
+              const submitted = await page.evaluate((submitTexts) => {
+                const containers = document.querySelectorAll(
+                  '.el-dialog:not([style*="display: none"]), .el-drawer:not([style*="display: none"]), ' +
+                  '.ant-modal:not([style*="display: none"]), .ant-drawer:not([style*="display: none"]), ' +
+                  '[role="dialog"]:not([style*="display: none"]), form, .el-form, .ant-form'
+                );
+                for (const container of containers) {
+                  if (!container || container.offsetParent === null) continue;
+                  const btns = container.querySelectorAll('button, .el-button, .ant-btn');
+                  for (const btn of btns) {
+                    const text = (btn.textContent || '').trim();
+                    if (submitTexts.some(t => text.includes(t)) && !btn.disabled) {
+                      btn.click();
+                      return true;
+                    }
+                  }
+                }
+                return false;
+              }, ['确定', '保存', '提交', '确认', 'OK', 'Save', 'Submit', 'Confirm']);
+
+              if (submitted) {
+                await page.waitForTimeout(2500);
+
+                const postPutCalls = formApiCalls.filter(a => a.method === 'POST' || a.method === 'PUT');
+                const errorCalls = formApiCalls.filter(a => a.status >= 400);
+
+                const interaction = {
+                  type: '表单提交',
+                  element: formTestInfo.text,
+                  inputsFilled: formInfo.inputCount,
+                  submitBtn: formInfo.submitBtnText,
+                  apiTriggered: postPutCalls.length > 0,
+                  apiCount: postPutCalls.length,
+                  apiErrors: errorCalls.map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+                };
+                result.interactions.push(interaction);
+
+                if (!interaction.apiTriggered) {
+                  result.failures.push(`表单提交未触发 POST/PUT 请求（填写 ${formInfo.inputCount} 个字段 → 点击 "${formInfo.submitBtnText}" → 无 API 请求）`);
+                } else if (interaction.apiErrors.length > 0) {
+                  // 400 可能是验证失败（测试数据不符合业务规则），降为 warning
+                  const server5xx = errorCalls.filter(a => a.status >= 500);
+                  if (server5xx.length > 0) {
+                    result.failures.push(`表单提交 API 返回 5xx: ${server5xx.map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`).join('; ')}`);
+                  } else {
+                    result.warnings.push(`表单提交 API 返回 ${errorCalls[0].status}（可能是测试数据不符合业务校验规则）`);
+                  }
+                }
+              }
+            } else {
+              result.warnings.push(`表单弹出但未找到提交按钮（${formInfo.inputCount} 个输入框）`);
+            }
+          } else if (formInfo.found && formInfo.inputCount === 0) {
+            result.warnings.push('新增按钮打开了弹窗但未检测到可填写输入框');
+          }
+
+          // 5e. 关闭弹窗恢复状态
+          try {
+            await page.evaluate(() => {
+              // 按 ESC 关闭
+              document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+              // 或点取消按钮
+              const cancelTexts = ['取消', '关闭', 'Cancel', 'Close'];
+              const btns = document.querySelectorAll('button, .el-button, .ant-btn');
+              for (const btn of btns) {
+                const text = (btn.textContent || '').trim();
+                if (cancelTexts.some(t => text === t) && btn.offsetParent !== null) {
+                  btn.click();
+                  break;
+                }
+              }
+            });
+            await page.waitForTimeout(500);
+          } catch { /* 关闭失败不影响 */ }
+        }
+      } finally {
+        page.removeListener('response', onFormResponse);
+      }
+    }
+  } catch (e) {
+    result.warnings.push(`表单提交测试异常: ${e.message.slice(0, 100)}`);
+  }
+
   return result;
 }
 

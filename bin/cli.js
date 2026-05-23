@@ -429,7 +429,8 @@ async function cmdGate(args) {
   } catch { /* guard 未安装时静默跳过 */ }
 
   let pass = true;
-  const fail = (msg) => { log.err(msg); pass = false; };
+  const failReasons = [];  // v2.9.0: 收集所有失败原因用于客观评分
+  const fail = (msg) => { log.err(msg); pass = false; failReasons.push(msg); };
 
   const specPath = path.join(changeDir, 'spec.md');
   const tasksPath = path.join(changeDir, 'tasks.md');
@@ -1356,6 +1357,92 @@ async function cmdGate(args) {
         }
       }
       break;
+    }
+  }
+
+  // ─── v2.9.0 客观评分 ───
+  // 基于 failReasons 中的关键词，精确计算各维度得分
+  if (phase === 'smoke' || phase === 'review') {
+    try {
+      let scoreItems;
+
+      if (phase === 'smoke') {
+        scoreItems = [
+          { name: '构建', weight: 15, failPatterns: [/构建失败/] },
+          { name: '骨架组件', weight: 15, failPatterns: [/骨架组件/] },
+          { name: 'E2E 页面', weight: 20, failPatterns: [/E2E.*失败/, /浏览器冒烟失败/, /白屏/, /框架错误/] },
+          { name: 'API 连通', weight: 20, failPatterns: [/API.*失败/, /API.*4xx/, /API.*5xx/, /API.*非.*JSON/, /连接失败/] },
+          { name: '交互测试', weight: 15, failPatterns: [/表单提交/, /搜索.*未触发/, /分页.*API.*报错/] },
+          { name: '代码质量', weight: 15, failPatterns: [/any.*泛滥/, /TypeScript any/] },
+        ];
+      } else {
+        scoreItems = [
+          { name: 'smoke 哨兵', weight: 8, failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
+          { name: '功能点覆盖', weight: 20, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
+          { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/] },
+          { name: '错误处理', weight: 12, failPatterns: [/错误处理缺失/, /无.*catch/] },
+          { name: '死代码', weight: 12, failPatterns: [/死代码/, /从未被.*import/] },
+          { name: '路由完整', weight: 8, failPatterns: [/路由缺失/] },
+          { name: '前端检查', weight: 10, failPatterns: [/stub.*handler/, /dialog.*未挂载/, /API.*覆盖/] },
+          { name: '校准差', weight: 10, failPatterns: [/校准差超标/, /自我评估.*失准/] },
+        ];
+      }
+
+      let totalWeight = 0;
+      let earned = 0;
+      const breakdown = [];
+
+      for (const item of scoreItems) {
+        totalWeight += item.weight;
+        const failed = failReasons.some(r => item.failPatterns.some(p => p.test(r)));
+        if (!failed) {
+          earned += item.weight;
+          breakdown.push(`  ✅ ${item.name} (+${item.weight})`);
+        } else {
+          breakdown.push(`  ❌ ${item.name} (+0/${item.weight})`);
+        }
+      }
+
+      const objectiveScore = Math.round((earned / totalWeight) * 100);
+
+      console.log('');
+      console.log(`📊 客观评分: ${objectiveScore}/100（代码计算，非 AI 自评）`);
+      console.log('─'.repeat(40));
+      for (const line of breakdown) console.log(line);
+      console.log('─'.repeat(40));
+
+      // 从 spec.md 读取 AI 自评分数
+      const selfScoreMatch = specContent.match(/完成度[^\d]*?(\d{1,3})\s*[%％分]/);
+      const coverageMatch = specContent.match(/(?:自评|评分|得分|score)[^\d]*?(\d{1,3})\s*[%％分]/i);
+      const selfScore = selfScoreMatch ? parseInt(selfScoreMatch[1]) : (coverageMatch ? parseInt(coverageMatch[1]) : null);
+
+      if (selfScore !== null) {
+        const delta = selfScore - objectiveScore;
+        if (delta > 20) {
+          log.warn(`AI 自评 ${selfScore} 分 vs 客观 ${objectiveScore} 分 — 偏差 ${delta} 分（自评虚高）`);
+          if (delta > 30) {
+            fail(`AI 自评与客观评分偏差过大（${selfScore} vs ${objectiveScore}，差 ${delta} > 30 红线）— 自评不可信`);
+          }
+        } else if (delta < -10) {
+          log.info(`AI 自评 ${selfScore} 分 vs 客观 ${objectiveScore} 分 — AI 过于保守`);
+        } else {
+          log.ok(`AI 自评 ${selfScore} 分 vs 客观 ${objectiveScore} 分 — 校准正常`);
+        }
+      }
+
+      // 写入哨兵供后续阶段引用
+      try {
+        const scorePath = path.join(changeDir, `.gate-${phase}-score.json`);
+        fs.writeFileSync(scorePath, JSON.stringify({
+          phase, objectiveScore, selfScore, timestamp: Date.now(),
+          breakdown: scoreItems.map(s => ({
+            name: s.name, weight: s.weight,
+            passed: !failReasons.some(r => s.failPatterns.some(p => p.test(r))),
+          })),
+        }, null, 2) + '\n');
+      } catch { /* 写入失败不影响 */ }
+    } catch (e) {
+      // 评分异常不影响 gate 结果
     }
   }
 
