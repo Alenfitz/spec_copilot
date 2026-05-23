@@ -1471,20 +1471,21 @@ function cmdGuard(args) {
 spec-copilot guard — 代码级护栏（AI 工具绕不过的硬拦截）
 
 用法:
-  spec-copilot guard install          安装 pre-commit hook + 初始化配置
+  spec-copilot guard install          初始化保护（chmod + git hook）
   spec-copilot guard status           查看保护状态
-  spec-copilot guard lock [<file>]    锁定文件（无参数 = 自动按阶段锁定）
-  spec-copilot guard unlock <file>    解锁文件
-  spec-copilot guard check [--hook]   运行检查（hook 自动调用）
+  spec-copilot guard lock [<file>]    锁定文件为只读（无参数 = 自动按阶段锁定）
+  spec-copilot guard unlock <file>    解锁文件为可写
+  spec-copilot guard check [--hook]   运行完整性检查
 
 原理:
-  git pre-commit hook 在每次提交时自动检查：
-  1. 被保护的文件（spec.md / domain-rules.md）是否被修改
-  2. 相位门禁是否满足（smoke 通过才能 review）
-  3. 骨架组件是否混入提交
+  主防线（不依赖 Git）：
+    chmod 444 — 被保护文件设为操作系统级只读
+    AI 工具调 write/edit → OS 直接拒绝 → 文件根本改不了
 
-  AI 工具可以忽略提示词，但绕不过 git hook。
-  人类紧急操作：git commit --no-verify
+  附加层（有 Git 时自动启用）：
+    pre-commit hook — 骨架组件检测 + 相位门禁
+
+  人类解锁：spec-copilot guard unlock <文件>
 `);
       break;
   }
