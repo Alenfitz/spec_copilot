@@ -585,6 +585,14 @@ async function cmdGate(args) {
               const ai = e2eResult.apiInteractionSummary;
               log.info(`  API 交互: ${ai.total} 请求（${ai.ok} 正常${ai.client4xx ? ` / ${ai.client4xx} 4xx` : ''}${ai.server5xx ? ` / ${ai.server5xx} 5xx` : ''}${ai.nonJson ? ` / ${ai.nonJson} 非JSON` : ''}）`);
             }
+            // v2.8.0: 显示交互测试摘要
+            if (e2eResult.interactionSummary && e2eResult.interactionSummary.totalInteractions > 0) {
+              const is = e2eResult.interactionSummary;
+              const tested = [];
+              if (is.searchTested) tested.push('搜索');
+              if (is.paginationTested) tested.push('分页');
+              log.ok(`  交互测试: ${is.totalInteractions} 项交互${tested.length ? `（${tested.join('、')}）` : ''}${is.failures ? ` / ${is.failures} 项失败` : ''}`);
+            }
             if (e2eResult.servers.alreadyRunning) {
               log.info('  使用已运行的开发服务器');
             }
@@ -1229,6 +1237,74 @@ async function cmdGate(args) {
           } catch {}
         }
       }
+
+      // ─── v2.8.0 独立 Reviewer：代码级 spec-to-code 验证 ───
+      try {
+        const { runReviewChecks } = require('./review-checks');
+        log.info('执行独立 Reviewer 检查...');
+        const reviewResult = runReviewChecks(projectRoot, specContent);
+
+        for (const check of reviewResult.checks) {
+          if (check.error) {
+            log.warn(`${check.name} 跳过：${check.error.split('\n')[0]}`);
+            continue;
+          }
+
+          if (check.name === 'API 契约校验') {
+            if (check.message) {
+              log.info(`${check.name}：${check.message}`);
+            } else if (check.pass) {
+              log.ok(`API 契约校验：${check.total} 个端点前后端均匹配`);
+            } else {
+              const details = [];
+              if (check.feMissing.length > 0) {
+                details.push(`前端未调用: ${check.feMissing.slice(0, 5).map(a => `${a.method} ${a.path}`).join(', ')}`);
+              }
+              if (check.beMissing.length > 0) {
+                details.push(`后端未实现: ${check.beMissing.slice(0, 5).map(a => `${a.method} ${a.path}`).join(', ')}`);
+              }
+              if (check.bothMissing.length > 0) {
+                details.push(`前后端均未找到: ${check.bothMissing.slice(0, 5).map(a => `${a.method} ${a.path}`).join(', ')}`);
+              }
+              fail(`API 契约不匹配（${check.matched}/${check.total} 匹配）：\n   ${details.join('\n   ')}`);
+            }
+          }
+
+          if (check.name === '错误处理审计') {
+            if (check.totalApiCalls === 0) {
+              log.info('错误处理审计：未检测到前端 API 调用');
+            } else {
+              const ratio = check.totalApiCalls > 0 ? ((check.noHandling / check.totalApiCalls) * 100).toFixed(0) : 0;
+              if (check.noHandling === 0 && check.emptyCatch === 0) {
+                log.ok(`错误处理审计：${check.totalApiCalls} 个 API 调用均有错误处理`);
+              } else if (ratio > 50) {
+                fail(`错误处理缺失严重（${check.noHandling}/${check.totalApiCalls} = ${ratio}% 无 catch）：\n   ${check.violations.slice(0, 5).map(v => `${v.file}:${v.line} — ${v.detail}`).join('\n   ')}`);
+              } else {
+                log.warn(`错误处理警告（${check.noHandling} 无 catch / ${check.emptyCatch} 空 catch / ${check.totalApiCalls} 总调用）：\n   ${check.violations.slice(0, 3).map(v => `${v.file}:${v.line} — ${v.detail}`).join('\n   ')}`);
+              }
+            }
+          }
+
+          if (check.name === '硬编码数据检测') {
+            if (check.suspects && check.suspects.length > 0) {
+              log.warn(`硬编码数据警告（${check.suspects.length} 处疑似 mock 数据）：\n   ${check.suspects.slice(0, 5).map(s => `${s.file}:${s.line} — ${s.detail}`).join('\n   ')}`);
+            }
+          }
+
+          if (check.name === '路由完整性') {
+            if (check.message) {
+              log.info(`${check.name}：${check.message}`);
+            } else if (check.pass) {
+              log.ok(`路由完整性：spec 声明的 ${check.total} 个路由均已注册`);
+            } else {
+              fail(`路由缺失（${check.matched}/${check.total} 匹配）：\n   缺失: ${check.missing.slice(0, 10).join(', ')}`);
+            }
+          }
+        }
+      } catch (e) {
+        log.warn(`独立 Reviewer 检查跳过：${e.message.split('\n')[0]}`);
+      }
+
       break;
     }
     case 'test': {

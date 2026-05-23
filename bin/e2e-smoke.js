@@ -747,6 +747,266 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
   return result;
 }
 
+// ─── v2.8.0 主动交互测试 ────────────────────────────────────
+
+/**
+ * 对页面执行主动交互测试
+ * 不需要知道"正确结果"，只验证：交互元素存在 → 操作触发 API → API 无报错
+ *
+ * @returns {Promise<InteractionResult>}
+ */
+async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
+  const result = {
+    route: routeInfo.route,
+    interactions: [],
+    failures: [],
+    warnings: [],
+  };
+
+  // 如果页面被重定向到登录页，跳过交互测试
+  const currentUrl = page.url();
+  if (currentUrl.includes('/login') || currentUrl.includes('/auth')) {
+    if (routeInfo.route !== '/login' && routeInfo.route !== '/auth') {
+      result.warnings.push('页面需认证，跳过交互测试');
+      return result;
+    }
+  }
+
+  // ── 1. 搜索/筛选交互 ──
+  try {
+    const searchInfo = await page.evaluate(() => {
+      // 查找搜索输入框
+      const searchSelectors = [
+        'input[type="search"]',
+        'input[placeholder*="搜索"]', 'input[placeholder*="查询"]', 'input[placeholder*="search"]',
+        'input[placeholder*="Search"]', 'input[placeholder*="请输入"]',
+        '.el-input input[placeholder*="搜"]', '.el-input input[placeholder*="查"]',
+        '.ant-input[placeholder*="搜"]', '.ant-input[placeholder*="查"]',
+        '.el-input__inner[placeholder*="搜"]',
+      ];
+      for (const sel of searchSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) { // visible
+          return { found: true, selector: sel, placeholder: el.placeholder || '' };
+        }
+      }
+      return { found: false };
+    });
+
+    if (searchInfo.found) {
+      // 收集 API 请求
+      const apiCalls = [];
+      const onSearchResponse = (res) => {
+        if (res.url().includes('/api/')) {
+          apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+        }
+      };
+      page.on('response', onSearchResponse);
+
+      try {
+        const searchInput = await page.$(searchInfo.selector);
+        if (searchInput) {
+          await searchInput.click();
+          await searchInput.fill('test');
+          // 触发搜索：Enter 或等 debounce
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(2000);
+
+          const interaction = {
+            type: '搜索',
+            element: searchInfo.placeholder || searchInfo.selector,
+            apiTriggered: apiCalls.length > 0,
+            apiCount: apiCalls.length,
+            apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+          };
+          result.interactions.push(interaction);
+
+          if (!interaction.apiTriggered) {
+            result.warnings.push(`搜索交互未触发 API 请求（输入 "test" + Enter 后无 /api/ 请求）`);
+          } else if (interaction.apiErrors.length > 0) {
+            result.failures.push(`搜索触发的 API 报错: ${interaction.apiErrors.slice(0, 2).join('; ')}`);
+          }
+
+          // 清空搜索恢复原状
+          await searchInput.fill('');
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(1000);
+        }
+      } finally {
+        page.removeListener('response', onSearchResponse);
+      }
+    }
+  } catch (e) {
+    result.warnings.push(`搜索交互测试异常: ${e.message.slice(0, 100)}`);
+  }
+
+  // ── 2. 分页交互 ──
+  try {
+    const paginationInfo = await page.evaluate(() => {
+      const paginationSelectors = [
+        '.el-pagination', '.ant-pagination', '.pagination',
+        'nav[aria-label*="pagination"]', '[class*="pager"]',
+      ];
+      for (const sel of paginationSelectors) {
+        const el = document.querySelector(sel);
+        if (el && el.offsetParent !== null) {
+          // 查找"下一页"或页码 2 按钮
+          const nextBtn = el.querySelector(
+            '.el-icon-arrow-right, .anticon-right, .btn-next, ' +
+            'button[aria-label="Next"], li.number:nth-child(2), ' +
+            '.el-pager li:nth-child(2), .ant-pagination-item:nth-child(2)'
+          );
+          // 也查找带数字 2 的分页按钮
+          const page2Btns = el.querySelectorAll('li, button, a');
+          let page2Ref = null;
+          page2Btns.forEach(btn => {
+            if ((btn.textContent || '').trim() === '2' && btn.offsetParent !== null) {
+              page2Ref = true;
+            }
+          });
+          return {
+            found: true,
+            selector: sel,
+            hasNextOrPage2: !!(nextBtn || page2Ref),
+          };
+        }
+      }
+      return { found: false };
+    });
+
+    if (paginationInfo.found && paginationInfo.hasNextOrPage2) {
+      const apiCalls = [];
+      const onPageResponse = (res) => {
+        if (res.url().includes('/api/')) {
+          apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+        }
+      };
+      page.on('response', onPageResponse);
+
+      try {
+        // 点击页码 2
+        const clicked = await page.evaluate((sel) => {
+          const pagination = document.querySelector(sel);
+          if (!pagination) return false;
+          const btns = pagination.querySelectorAll('li, button, a');
+          for (const btn of btns) {
+            if ((btn.textContent || '').trim() === '2' && btn.offsetParent !== null) {
+              btn.click();
+              return true;
+            }
+          }
+          // 回退：点下一页
+          const next = pagination.querySelector('.btn-next, button[aria-label="Next"]');
+          if (next) { next.click(); return true; }
+          return false;
+        }, paginationInfo.selector);
+
+        if (clicked) {
+          await page.waitForTimeout(2000);
+
+          const interaction = {
+            type: '分页',
+            element: paginationInfo.selector,
+            apiTriggered: apiCalls.length > 0,
+            apiCount: apiCalls.length,
+            apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+            hasPageParam: apiCalls.some(a => /[?&](page|pageNum|current|offset)=/i.test(a.url)),
+          };
+          result.interactions.push(interaction);
+
+          if (!interaction.apiTriggered) {
+            result.warnings.push('分页点击未触发 API 请求（可能是前端假分页）');
+          } else if (!interaction.hasPageParam) {
+            result.warnings.push('分页 API 请求无分页参数（page/pageNum/current）— 可能未正确传参');
+          } else if (interaction.apiErrors.length > 0) {
+            result.failures.push(`分页触发的 API 报错: ${interaction.apiErrors.slice(0, 2).join('; ')}`);
+          }
+        }
+      } finally {
+        page.removeListener('response', onPageResponse);
+      }
+    }
+  } catch (e) {
+    result.warnings.push(`分页交互测试异常: ${e.message.slice(0, 100)}`);
+  }
+
+  // ── 3. 新增/创建按钮交互（只检测存在性和可点击性，不实际提交） ──
+  try {
+    const createBtnInfo = await page.evaluate(() => {
+      const btnTexts = ['新增', '新建', '添加', '创建', 'Add', 'Create', 'New', '+ 新增', '＋新增'];
+      const allBtns = document.querySelectorAll('button, .el-button, .ant-btn, a.btn');
+      for (const btn of allBtns) {
+        const text = (btn.textContent || '').trim();
+        if (btnTexts.some(t => text.includes(t)) && btn.offsetParent !== null) {
+          return {
+            found: true,
+            text: text.slice(0, 30),
+            disabled: btn.disabled || btn.classList.contains('is-disabled'),
+          };
+        }
+      }
+      return { found: false };
+    });
+
+    if (createBtnInfo.found) {
+      const interaction = {
+        type: '新增按钮',
+        element: createBtnInfo.text,
+        exists: true,
+        disabled: createBtnInfo.disabled,
+      };
+      result.interactions.push(interaction);
+
+      if (createBtnInfo.disabled) {
+        result.warnings.push(`新增按钮 "${createBtnInfo.text}" 存在但被禁用`);
+      }
+    }
+  } catch (e) {
+    // 静默
+  }
+
+  // ── 4. 表格行操作按钮检测 ──
+  try {
+    const tableActionInfo = await page.evaluate(() => {
+      const tables = document.querySelectorAll('.el-table, .ant-table, table');
+      if (tables.length === 0) return { found: false };
+
+      const actionTexts = ['编辑', '删除', '查看', '详情', 'Edit', 'Delete', 'View', 'Detail'];
+      let actionCount = 0;
+      let disabledCount = 0;
+
+      tables.forEach(table => {
+        const rows = table.querySelectorAll('tbody tr');
+        if (rows.length === 0) return;
+        // 只检查第一行
+        const firstRow = rows[0];
+        const btns = firstRow.querySelectorAll('button, .el-button, .ant-btn, a');
+        btns.forEach(btn => {
+          const text = (btn.textContent || '').trim();
+          if (actionTexts.some(t => text.includes(t))) {
+            actionCount++;
+            if (btn.disabled || btn.classList.contains('is-disabled')) disabledCount++;
+          }
+        });
+      });
+
+      return { found: actionCount > 0, actionCount, disabledCount };
+    });
+
+    if (tableActionInfo.found) {
+      result.interactions.push({
+        type: '表格操作',
+        actionCount: tableActionInfo.actionCount,
+        disabledCount: tableActionInfo.disabledCount,
+      });
+    }
+  } catch (e) {
+    // 静默
+  }
+
+  return result;
+}
+
 // ─── API 健康检查 ────────────────────────────────────────────
 
 /**
@@ -976,6 +1236,7 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
 
       const page = await context.newPage();
       const pageResults = [];
+      const interactionResults = [];  // v2.8.0
       const allConsoleErrors = [];
 
       for (const routeInfo of testablePages) {
@@ -983,6 +1244,31 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         pageResults.push(result);
         if (result.warnings) {
           allConsoleErrors.push(...result.warnings.filter(w => w.includes('控制台错误')));
+        }
+
+        // v2.8.0: 被动检查通过 + 非 authGated → 执行主动交互测试
+        if (result.pass && !result.authGated) {
+          try {
+            const interResult = await checkPageInteractions(page, frontendUrl, routeInfo, timeout);
+            if (interResult.interactions.length > 0 || interResult.failures.length > 0) {
+              interactionResults.push(interResult);
+            }
+            // 交互测试的 failures 也算入该页面的 failures
+            if (interResult.failures.length > 0) {
+              result.failures.push(...interResult.failures);
+              result.pass = false;
+            }
+            if (interResult.warnings.length > 0) {
+              result.warnings.push(...interResult.warnings);
+            }
+          } catch (e) {
+            // 交互测试异常不影响被动检查结果
+          }
+          // 交互测试后重新导航回当前页面，恢复状态
+          try {
+            await page.goto(`${frontendUrl}${routeInfo.route}`, { waitUntil: 'networkidle', timeout });
+            await page.waitForTimeout(500);
+          } catch { /* 恢复失败不影响后续页面 */ }
         }
       }
 
@@ -1003,13 +1289,24 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         failed: allApiInteractions.filter(a => a.status === 0).length,
       };
 
+      // v2.8.0: 汇总交互测试结果
+      const interactionSummary = {
+        totalPages: interactionResults.length,
+        totalInteractions: interactionResults.reduce((s, r) => s + r.interactions.length, 0),
+        searchTested: interactionResults.some(r => r.interactions.some(i => i.type === '搜索')),
+        paginationTested: interactionResults.some(r => r.interactions.some(i => i.type === '分页')),
+        failures: interactionResults.reduce((s, r) => s + r.failures.length, 0),
+      };
+
       return {
         available: true,
         pass: failedPages.length === 0 && failedApis.filter(a => a.status === 0 || a.status >= 500).length === 0,
         skipReason: null,
         pages: pageResults,
         apiResults,
-        apiInteractionSummary,  // v2.7.0
+        apiInteractionSummary,
+        interactionResults,      // v2.8.0
+        interactionSummary,      // v2.8.0
         consoleErrors: allConsoleErrors,
         servers: serverInfo,
         summary: {
