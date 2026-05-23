@@ -92,6 +92,35 @@ npx @alenfitz/spec-copilot uninstall --confirm       # 移除框架
     └── scripts/                       ← Lint、门禁、Hook 脚本
 ```
 
+## 门禁系统（自动化质量检查）
+
+CLI 门禁在阶段切换时执行客观检查，不通过则阻断：
+
+```bash
+npx @alenfitz/spec-copilot gate <变更名> smoke
+```
+
+| 门禁 | 检查项 |
+|------|--------|
+| `apply` | Spec 完整性 + 前后端 task 交织度 + 前端 task 粒度 |
+| `smoke` | **构建验证** + **骨架检测** + TS any 泛滥 + **E2E 浏览器冒烟** |
+| `review` | smoke 哨兵 + 功能点覆盖 + 死代码 + stub handler + 嗨语言 |
+| `archive` | review 哨兵 + spec 审查结论 |
+
+### E2E 浏览器冒烟（v2.3.0）
+
+基于 Playwright 的端到端浏览器验证 — 抓住"能编译但不能用"的问题：
+
+- **自动检测**技术栈（Spring Boot + Vue3、Vite 等）并启动开发服务器
+- **Spec 驱动**路由提取：从 spec.md + 项目 router 文件自动生成测试页面
+- **逐页面检查**：白屏、未捕获 JS 异常、API 连接失败、框架错误遮罩
+- **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
+
+```bash
+# 在你的项目中安装 Playwright（可选，未安装时 E2E 自动跳过）
+cd frontend && npm i -D playwright && npx playwright install chromium
+```
+
 ## 复杂度分级
 
 | 级别 | 判定标准（按影响面） | 需要什么 |

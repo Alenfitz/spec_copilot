@@ -91,6 +91,35 @@ your-project/
     └── scripts/                       ← Lint, gate, hook scripts
 ```
 
+## Gate System (Automated Quality Checks)
+
+The CLI gate system blocks phase transitions until objective criteria are met:
+
+```bash
+npx @alenfitz/spec-copilot gate <name> smoke
+```
+
+| Gate | Checks |
+|------|--------|
+| `apply` | Spec completeness + task interleaving + frontend task granularity |
+| `smoke` | **Build verification** + **skeleton detection** + TS any abuse + **E2E browser smoke** |
+| `review` | Smoke sentinel + feature coverage + dead code + stub handlers + hype language |
+| `archive` | Review sentinel + spec audit conclusion |
+
+### E2E Browser Smoke (v2.3.0)
+
+Playwright-based end-to-end verification — catches "compiles but doesn't work" issues:
+
+- **Auto-detects** tech stack (Spring Boot + Vue3, Vite, etc.) and starts dev servers
+- **Spec-driven** route extraction from spec.md + project router files
+- **Checks per page**: white screen, uncaught JS errors, API failures, framework error overlays
+- **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
+
+```bash
+# Install Playwright in your project (optional, E2E skips gracefully if missing)
+cd frontend && npm i -D playwright && npx playwright install chromium
+```
+
 ## Complexity Tiers
 
 | Tier | Criteria | What's Required |

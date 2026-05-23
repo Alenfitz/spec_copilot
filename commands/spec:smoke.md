@@ -1,27 +1,62 @@
 ---
-description: 冒烟验证（编译 + 核心接口测试）
+description: 冒烟验证（构建 + 骨架检测 + E2E 浏览器验证 + 接口测试）
 ---
 
 请按 AGENTS.md 中定义的 /smoke 流程执行：
 
 **变更名**：$ARGUMENTS
 
-步骤：
-1. 编译/构建后端（命令见 `spec_copilot/rules/project-context.md` §8）
-2. 编译/构建前端（如有）
-3. 读取 spec.md §3 功能点列表和 §6 API 契约
-4. 对 spec 中**每个 API 接口**执行 curl 验证（不仅限"核心接口"），记录状态码和响应摘要
-5. 如有前端页面，逐页面确认可渲染、核心交互可操作
-6. 统计接口冒烟覆盖率：`通过接口数/总接口数`
+## 步骤
+
+### Step 0：程序化 gate 检查（v2.2.0+ 自动化）
+
+运行 CLI 门禁，获取客观构建结果、骨架检测结果和 E2E 浏览器验证结果：
+
+```bash
+npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
+```
+
+此命令自动执行：
+- 前后端构建验证（npm run build / mvn compile）
+- 骨架组件检测（el-empty / TODO-only / 空壳组件）
+- TypeScript any 泛滥检测（warning 级别）
+- **E2E 浏览器冒烟**（v2.3.0 新增，需目标项目安装 Playwright）：
+  - 自动启动/检测前后端开发服务器
+  - 从 spec.md 提取页面路由，用 headless Chromium 逐页面检查
+  - 检查项：白屏、JS 异常、API 连接失败、5xx 响应、框架错误遮罩
+  - 完成后自动关闭启动的服务器
+
+可选 flags：
+- `--headed`：显示浏览器窗口（调试用）
+- `--base-url http://localhost:5173`：手动指定前端 URL（跳过自动检测）
+- `--backend-url http://localhost:8080`：手动指定后端 URL
+- `--no-e2e`：跳过 E2E 浏览器检查
+
+**gate 未通过 → 直接进入 /spec:fix，不执行后续步骤。**
+
+> 💡 E2E 需要 Playwright：`cd <frontend-dir> && npm i -D playwright && npx playwright install chromium`
+> 未安装时 E2E 自动跳过（不阻断），但强烈建议安装以获得真实浏览器验证。
+
+### Step 1：接口冒烟
+
+1. 读取 spec.md §3 功能点列表和 §6 API 契约
+2. 对 spec 中**每个 API 接口**执行 curl 验证（不仅限"核心接口"），记录状态码和响应摘要
+3. 统计接口冒烟覆盖率：`通过接口数/总接口数`
 
 > ⚠️ 仅验证"核心接口"是不够的。Spec 定义的每个 API 都必须 curl 验证可达。不可达的接口记录为失败项。
+
+### Step 2：前端页面验证
+
+如 Step 0 的 E2E 已通过，此步骤可简化为确认性检查。
+
+如未安装 Playwright（E2E 跳过），需手动逐页面确认可渲染、核心交互可操作。
 
 ## 结束后
 
 1. **记录到 log.md**：在 `## 时间线` 表格尾部追加一行 `| 当前时间 | smoke | 冒烟测试通过 ✓ |`（失败则写 `| 当前时间 | smoke | 冒烟失败 ✗ <原因> |`）
 2. 读取 spec.md §2 复杂度等级后输出：
 
-**通过（编译 0 error + 核心接口返回正常）：**
+**通过（gate ✓ + 接口返回正常）：**
 
 🟡 中等需求：
 ```

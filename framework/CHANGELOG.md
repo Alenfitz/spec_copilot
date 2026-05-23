@@ -4,6 +4,88 @@
 
 ---
 
+## [2.3.0] - 2026-05-23
+
+### 新增
+
+**Playwright E2E 浏览器冒烟（解决"静态检查通过但浏览器不能用"的核心问题）：**
+
+- **新增 `bin/e2e-smoke.js` 模块**：Spec-driven 端到端浏览器自动化验证
+- **自动技术栈检测**：支持 Spring Boot + Vue3（分目录/合体）、Vite 纯前端等常见栈
+- **开发服务器自动管理**：检测已运行的服务器或自动启动，测试完成后自动清理
+- **Spec-driven 路由提取**：从 spec.md §3/§6 提取页面路由 + 从项目 router 文件补全
+- **6 项浏览器硬检查**：
+  - 白屏检测（#app/#root 无子元素）
+  - 未捕获 JS 异常（pageerror 事件）
+  - API 网络连接失败（ECONNREFUSED）
+  - API 5xx 响应
+  - 框架错误遮罩（Vite/React error overlay、Spring Boot Whitelabel）
+  - HTTP 错误页面（404、Cannot GET）
+- **API 健康检查**：用 Node.js http 模块逐个探测 spec 中声明的 API 端点
+- **登录重定向识别**：重定向到 /login 标记为"需认证"（warning 级别，不阻断）
+- **控制台噪音过滤**：内置 15+ 条开发环境常见无害模式（HMR、DevTools、favicon 等）
+
+### CLI 变更
+
+- `gate <name> smoke` 新增 E2E 浏览器检查（Playwright 未安装时自动跳过，不阻断）
+- 新增 CLI flags：`--headed`（显示浏览器）、`--base-url`（手动指定前端 URL）、`--backend-url`（手动指定后端 URL）、`--no-e2e`（跳过 E2E）
+- `cmdGate` 升级为 async 函数以支持异步 Playwright 操作
+
+### 设计理念
+
+> v2.2.0 解决了"代码结构层面"的骨架问题（静态检测），但用户实际浏览器体验仍然只有 50% 可用。
+> 根因：curl 200 ≠ 前后端对齐。camelCase/snake_case 不匹配、响应结构错位、子表不持久化 —— 这些"接缝"问题在组件级测试中完全不可见。
+> v2.3.0 核心突破：**用真实浏览器跑真实页面，让 smoke gate 验证"用户能不能用"而不仅仅是"代码能不能编译"**。
+
+### Playwright 安装
+
+Playwright 是目标项目的可选依赖，spec-copilot 本身不包含 Playwright：
+
+```bash
+cd <frontend-dir> && npm i -D playwright && npx playwright install chromium
+```
+
+未安装时 E2E 检查自动跳过（warning 级别），不影响其他 smoke 检查。
+
+---
+
+## [2.2.0] - 2026-05-23
+
+### 新增
+
+**前端硬检测体系（解决"骨架组件反复出现"的根因问题）：**
+
+治本层（apply gate — 防止骨架产生）：
+- **前后端 task 交织检查**：tasks.md 中连续 > 3 个后端 task 未穿插前端 → gate fail。防止前端 task 被挤到最后导致 context 耗尽
+- **前端 task 粒度上限**：单个前端 task 涉及 > 4 个 .vue 文件 → gate fail。防止单 task 塞过多组件导致后半段降级为骨架
+- **前端 task 集中度检测**：前端 task 全部集中在 70% 之后 → gate fail
+
+治标层（smoke gate — 客观验证，不依赖 AI 自述）：
+- **新增 `gate <name> smoke` phase**：smoke 从纯 prompt 阶段升级为 CLI 可验证阶段
+- **构建验证**：自动检测并执行 `npm run build` / `mvn compile`，构建失败 = gate fail
+- **骨架组件检测**：扫描 .vue 文件 `<template>` 区块，检测 el-empty / TODO-only / 空壳组件
+- **TypeScript any 泛滥检测**：统计 `: any` / `as any` 出现密度，超标 = warning
+- **smoke 哨兵文件**：通过后写入 `.gate-smoke-passed`，review 阶段可校验
+
+兜底层（review gate — 最后防线）：
+- **反"太嗨"机制 8：骨架组件检测**：拦截"文件存在、被引用、但内容是空壳"的组件 — 现有 stub/死代码检测的盲区
+- **前端 task 功能性自证检测**：前端 task 的验证结果必须包含构建输出 + 用户操作路径描述
+
+### 变更
+
+- `gate` 命令支持 5 个 phase：apply / **smoke** / review / test / archive（新增 smoke）
+- `spec:smoke.md` 增加 Step 0：运行 `gate <name> smoke` 获取客观检测结果
+- `spec:apply.md` 前置检查说明新增 task 交织度和粒度检查
+- 新增独立模块 `bin/frontend-checks.js`，导出 6 个检查函数供 cli.js 调用
+
+### 设计理念
+
+> 之前三版迭代反复加 prompt 级约束（"前端骨架=未完成"铁律、4条完成判定、前后端1:3比例）但问题反复出现。
+> 根因：prompt 解决"知道该做什么"，解决不了"验证做没做到"。
+> v2.2.0 核心转变：**治本（改变 task 结构防止骨架产生）+ 治标（CLI 自动化验证代替 AI 自述）**。
+
+---
+
 ## [1.6.0] - 2026-05-21
 
 ### 新增

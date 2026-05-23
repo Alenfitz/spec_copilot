@@ -9,6 +9,9 @@ description: 执行编码（逐 task 推进，每个 task 停顿等确认）
 ## 前置检查（缺一不过）
 
 1. 运行 `npx @alenfitz/spec-copilot gate <变更名> apply`（跨平台门禁检查）
+   - v2.2.0 新增：gate 会检查 tasks.md 的前后端 task 交织度和前端 task 粒度
+   - 连续 > 3 个后端 task 未穿插前端 → gate fail（必须调整 task 顺序）
+   - 单个前端 task 涉及 > 4 个 .vue 文件 → gate fail（必须拆分 task）
 2. Gate 通过后：`git checkout -b feature/<变更名>`（如已在分支则跳过）
 3. 告知用户当前分支名
 

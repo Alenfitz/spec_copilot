@@ -20,6 +20,14 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { adapters, detectTools, supportedTools, parseAgentMeta } = require('../adapters');
+const {
+  detectSkeletonComponents,
+  checkBuildable,
+  detectAnyAbuse,
+  checkTaskInterleaving,
+  checkTaskGranularity,
+  checkFrontendEvidence,
+} = require('./frontend-checks');
 
 // ─── 常量 ───────────────────────────────────────────────────
 
@@ -372,17 +380,18 @@ function cmdUpdate(args) {
 
 // ─── Gate ───────────────────────────────────────────────────
 
-function cmdGate(args) {
+async function cmdGate(args) {
   const changeName = args[0];
   const phase = args[1];
 
   if (!changeName || !phase) {
     log.err('用法: npx @alenfitz/spec-copilot gate <变更名> <phase>');
-    log.info('phase: apply | review | test | archive');
+    log.info('phase: apply | smoke | review | test | archive');
+    log.info('smoke flags: --headed | --base-url <url> | --backend-url <url> | --no-e2e');
     process.exit(2);
   }
 
-  const validPhases = ['apply', 'review', 'test', 'archive'];
+  const validPhases = ['apply', 'smoke', 'review', 'test', 'archive'];
   if (!validPhases.includes(phase)) {
     log.err(`未知 phase: ${phase}（可选: ${validPhases.join(', ')}）`);
     process.exit(2);
@@ -432,9 +441,171 @@ function cmdGate(args) {
       } else {
         log.ok('log.md 存在');
       }
+
+      // ─── 前端治本检查 1：tasks.md 前后端交织 ───
+      if (fs.existsSync(tasksPath)) {
+        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+        const specMentionsFE = /前端|页面|组件|\.vue|Vue|React|UI 交互|界面/.test(specContent);
+        if (specMentionsFE) {
+          try {
+            const interleave = checkTaskInterleaving(tasksContent);
+            if (!interleave.pass) {
+              for (const f of interleave.failures) { fail(f); }
+            } else if (interleave.feCount > 0) {
+              log.ok(`前后端交织检查：后端 ${interleave.beCount} / 前端 ${interleave.feCount}，最大连续后端 ${interleave.maxConsecutiveBe}（≤ 3）`);
+            }
+          } catch (e) {
+            log.warn(`前后端交织检查跳过：${e.message.split('\n')[0]}`);
+          }
+
+          // ─── 前端治本检查 2：前端 task 粒度上限 ───
+          try {
+            const granularity = checkTaskGranularity(tasksContent);
+            if (granularity.oversized.length > 0) {
+              const details = granularity.oversized.map(o =>
+                `${o.task}（${o.title}）涉及 ${o.vueCount} 个 .vue 文件: ${o.files.join(', ')}${o.vueCount > o.files.length ? ' ...' : ''}`
+              ).join('\n   ');
+              fail(`前端 task 粒度超标（单 task ≤ ${granularity.maxAllowed} 个 .vue 文件）：\n   ${details}\n   ⚠️ task 粒度过大会导致 context 耗尽、后半段组件降级为骨架`);
+            } else {
+              log.ok(`前端 task 粒度检查：均在 ${granularity.maxAllowed} 个 .vue 文件以内`);
+            }
+          } catch (e) {
+            log.warn(`前端 task 粒度检查跳过：${e.message.split('\n')[0]}`);
+          }
+        }
+      }
+      break;
+    }
+    case 'smoke': {
+      // ─── smoke gate：客观构建验证 + 骨架检测（不依赖 AI 自述） ───
+
+      // 1. 构建验证
+      log.info('执行构建验证...');
+      try {
+        const buildResults = checkBuildable(projectRoot);
+        if (buildResults.frontend) {
+          if (buildResults.frontend.pass) {
+            log.ok(`前端构建成功（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）`);
+          } else {
+            fail(`前端构建失败（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）：\n   ${buildResults.frontend.error}`);
+          }
+        }
+        if (buildResults.backend) {
+          if (buildResults.backend.pass) {
+            log.ok(`后端构建成功（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）`);
+          } else {
+            fail(`后端构建失败（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）：\n   ${buildResults.backend.error}`);
+          }
+        }
+        if (!buildResults.frontend && !buildResults.backend) {
+          log.warn('未检测到可构建项目（无 package.json 或 pom.xml）');
+        }
+      } catch (e) {
+        log.warn(`构建验证跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // 2. 骨架组件检测
+      try {
+        const skeletonResult = detectSkeletonComponents(projectRoot);
+        if (skeletonResult.skeletons.length > 0) {
+          const details = skeletonResult.skeletons.map(s => `${s.file}: ${s.reason}`).join('\n   ');
+          fail(`骨架组件检测命中（${skeletonResult.skeletons.length}/${skeletonResult.total} 个组件为骨架）：\n   ${details}\n   ⚠️ 骨架组件 = 未完成。必须实现真实交互后才能通过 smoke`);
+        } else if (skeletonResult.total > 0) {
+          log.ok(`骨架组件检测：${skeletonResult.total} 个组件均有实质内容`);
+        }
+      } catch (e) {
+        log.warn(`骨架组件检测跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // 3. any 泛滥检测（warning 级别，不阻断）
+      try {
+        const anyResult = detectAnyAbuse(projectRoot);
+        if (anyResult.abusers.length > 0) {
+          const details = anyResult.abusers.slice(0, 8).map(a =>
+            `${a.file}: ${a.anyCount} 处 any / ${a.lineCount} 行（${a.ratio}%）`
+          ).join('\n   ');
+          log.warn(`TypeScript any 泛滥警告（全局 ${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%）：\n   ${details}`);
+        } else if (anyResult.totalLines > 0) {
+          log.ok(`TypeScript any 检测：${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%`);
+        }
+      } catch (e) {
+        log.warn(`any 泛滥检测跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // 4. E2E 浏览器冒烟（可选，需目标项目安装 Playwright）
+      if (!args.includes('--no-e2e')) {
+        try {
+          const { runE2ESmoke } = require('./e2e-smoke');
+          const e2eOpts = {
+            timeout: 30000,
+            headed: args.includes('--headed'),
+          };
+          // 解析 --base-url / --backend-url
+          const baseUrlIdx = args.indexOf('--base-url');
+          if (baseUrlIdx !== -1 && args[baseUrlIdx + 1]) e2eOpts.baseUrl = args[baseUrlIdx + 1];
+          const beUrlIdx = args.indexOf('--backend-url');
+          if (beUrlIdx !== -1 && args[beUrlIdx + 1]) e2eOpts.backendUrl = args[beUrlIdx + 1];
+
+          log.info('执行 E2E 浏览器冒烟...');
+          const e2eResult = await runE2ESmoke(projectRoot, specContent, e2eOpts);
+
+          if (!e2eResult.available) {
+            log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+            log.info('  安装方法：cd <frontend-dir> && npm i -D playwright && npx playwright install chromium');
+          } else if (e2eResult.startupError) {
+            fail(`E2E 服务器启动失败：${e2eResult.startupError}`);
+          } else if (e2eResult.skipReason) {
+            log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+          } else if (e2eResult.pass) {
+            const s = e2eResult.summary;
+            log.ok(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`);
+            if (e2eResult.servers.alreadyRunning) {
+              log.info('  使用已运行的开发服务器');
+            }
+            // 显示 warnings
+            for (const page of e2eResult.pages) {
+              if (page.warnings && page.warnings.length > 0) {
+                for (const w of page.warnings) {
+                  log.warn(`  ${page.route}: ${w}`);
+                }
+              }
+            }
+          } else {
+            const failedPages = e2eResult.pages.filter(p => !p.pass);
+            const failedApis = (e2eResult.apiResults || []).filter(a => !a.pass && (a.status === 0 || a.status >= 500));
+            const details = [];
+            for (const p of failedPages) {
+              details.push(`${p.route} (${p.specRef}): ${p.failures.join('; ')}`);
+            }
+            for (const a of failedApis) {
+              details.push(`API ${a.method} ${a.path}: ${a.error || 'HTTP ' + a.status}`);
+            }
+            fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 15).join('\n   ')}${details.length > 15 ? `\n   ... 还有 ${details.length - 15} 项` : ''}`);
+          }
+        } catch (e) {
+          log.warn(`E2E 浏览器冒烟跳过：${e.message.split('\n')[0]}`);
+        }
+      } else {
+        log.info('E2E 浏览器冒烟已通过 --no-e2e 跳过');
+      }
+
       break;
     }
     case 'review': {
+      // ─── smoke gate 哨兵检查（v2.2.0）───
+      const smokeSentinel = path.join(changeDir, '.gate-smoke-passed');
+      if (fs.existsSync(smokeSentinel)) {
+        try {
+          const smokeData = JSON.parse(fs.readFileSync(smokeSentinel, 'utf-8'));
+          const ageMin = Math.round((Date.now() - smokeData.timestamp) / 60000);
+          log.ok(`smoke gate 哨兵有效（${ageMin} 分钟前通过）`);
+        } catch {
+          log.ok('smoke gate 哨兵有效');
+        }
+      } else {
+        log.warn('未检测到 smoke gate 哨兵（.gate-smoke-passed）— 建议先运行 `gate <name> smoke`');
+      }
+
       if (!fs.existsSync(logPath)) {
         fail('log.md 不存在');
       } else {
@@ -738,6 +909,35 @@ function cmdGate(args) {
         }
       } catch (e) {
         log.warn(`前端严格检查跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // ─── 反"太嗨"机制 8：骨架组件检测（v2.2.0） ───
+      // 拦截"文件存在、被引用、但内容是空壳"的组件 —— 现有 stub/死代码检测的盲区
+      try {
+        const skeletonResult = detectSkeletonComponents(projectRoot);
+        if (skeletonResult.skeletons.length > 0) {
+          const details = skeletonResult.skeletons.map(s => `${s.file}: ${s.reason}`).join('\n   ');
+          fail(`骨架组件检测命中（${skeletonResult.skeletons.length}/${skeletonResult.total} 个组件为骨架）：\n   ${details}\n   ⚠️ 骨架组件被引用但无实质内容 = 用户可达但不可用`);
+        } else if (skeletonResult.total > 0) {
+          log.ok(`骨架组件检测：${skeletonResult.total} 个组件均有实质内容`);
+        }
+      } catch (e) {
+        log.warn(`骨架组件检测跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // ─── 前端 task 功能性自证检测（v2.2.0） ───
+      if (fs.existsSync(tasksPath)) {
+        try {
+          const tasksContentForEvidence = fs.readFileSync(tasksPath, 'utf-8');
+          const evidenceResult = checkFrontendEvidence(tasksContentForEvidence);
+          if (evidenceResult.failures.length > 0) {
+            fail(`前端 task 功能性自证缺失：\n   ${evidenceResult.failures.join('\n   ')}\n   ⚠️ 前端 task 必须包含构建验证输出 + 用户操作路径描述`);
+          } else {
+            log.ok('前端 task 功能性自证：完整');
+          }
+        } catch (e) {
+          log.warn(`前端功能性自证检测跳过：${e.message.split('\n')[0]}`);
+        }
       }
 
       // ─── 前后端工作量均衡检查 ───
@@ -1054,24 +1254,26 @@ function cmdGate(args) {
 
   console.log('');
   if (pass) {
-    // 成功通过 review gate → 写哨兵（其它 phase 不写）
-    if (phase === 'review') {
+    // 成功通过 smoke/review gate → 写哨兵
+    if (phase === 'smoke' || phase === 'review') {
       try {
-        const sentinelPath = path.join(changeDir, '.gate-review-passed');
+        const sentinelName = phase === 'smoke' ? '.gate-smoke-passed' : '.gate-review-passed';
+        const sentinelPath = path.join(changeDir, sentinelName);
         fs.writeFileSync(sentinelPath, JSON.stringify({
           timestamp: Date.now(),
           version: readVersion(),
         }, null, 2) + '\n');
       } catch (e) {
-        log.warn(`写入 review 哨兵失败：${e.message}`);
+        log.warn(`写入 ${phase} 哨兵失败：${e.message}`);
       }
     }
     log.ok(`Gate 通过 ✓ — 可以进入 ${phase} 阶段`);
     process.exit(0);
   } else {
-    // review gate 失败 → 清除可能存在的旧哨兵，防止下次 archive 误信
-    if (phase === 'review') {
-      const sentinelPath = path.join(changeDir, '.gate-review-passed');
+    // gate 失败 → 清除可能存在的旧哨兵
+    if (phase === 'smoke' || phase === 'review') {
+      const sentinelName = phase === 'smoke' ? '.gate-smoke-passed' : '.gate-review-passed';
+      const sentinelPath = path.join(changeDir, sentinelName);
       if (fs.existsSync(sentinelPath)) {
         try { fs.unlinkSync(sentinelPath); } catch {}
       }
@@ -1375,6 +1577,20 @@ function cmdDoctor() {
     }
   }
 
+  // 检查 Playwright（信息性，非必须）
+  try {
+    const { resolvePlaywright } = require('./e2e-smoke');
+    const pw = resolvePlaywright(projectRoot);
+    if (pw) {
+      log.ok('Playwright 已安装（E2E 浏览器冒烟可用）');
+    } else {
+      log.info('Playwright 未安装（E2E 浏览器冒烟不可用 — 可选）');
+      log.info('  安装：cd <frontend-dir> && npm i -D playwright && npx playwright install chromium');
+    }
+  } catch {
+    log.info('Playwright 检查跳过');
+  }
+
   console.log('');
   if (issues === 0) {
     log.ok('全部检查通过');
@@ -1655,7 +1871,7 @@ switch (cmd) {
     cmdUpdate(args.slice(1));
     break;
   case 'gate':
-    cmdGate(args.slice(1));
+    cmdGate(args.slice(1)).catch(e => { log.err(e.message); process.exit(1); });
     break;
   case 'lint':
     cmdLint(args.slice(1));
