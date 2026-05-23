@@ -387,7 +387,7 @@ async function cmdGate(args) {
   if (!changeName || !phase) {
     log.err('用法: npx @alenfitz/spec-copilot gate <变更名> <phase>');
     log.info('phase: apply | smoke | review | test | archive');
-    log.info('smoke flags: --headed | --base-url <url> | --backend-url <url> | --engine auto|playwright|opencli | --no-e2e');
+    log.info('smoke flags: --headed | --base-url <url> | --backend-url <url> | --no-e2e');
     process.exit(2);
   }
 
@@ -545,8 +545,6 @@ async function cmdGate(args) {
           if (baseUrlIdx !== -1 && args[baseUrlIdx + 1]) e2eOpts.baseUrl = args[baseUrlIdx + 1];
           const beUrlIdx = args.indexOf('--backend-url');
           if (beUrlIdx !== -1 && args[beUrlIdx + 1]) e2eOpts.backendUrl = args[beUrlIdx + 1];
-          const engineIdx = args.indexOf('--engine');
-          if (engineIdx !== -1 && args[engineIdx + 1]) e2eOpts.engine = args[engineIdx + 1];
 
           log.info('执行 E2E 浏览器冒烟...');
           const e2eResult = await runE2ESmoke(projectRoot, specContent, e2eOpts);
@@ -560,12 +558,7 @@ async function cmdGate(args) {
             log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
           } else if (e2eResult.pass) {
             const s = e2eResult.summary;
-            const ei = e2eResult.engineInfo;
-            const engineLabel = ei && ei.primary === 'opencli' ? 'opencli' : ei && ei.primary === 'chrome-cdp' ? 'Chrome CDP' : 'playwright-core';
-            log.ok(`E2E 浏览器冒烟通过（${engineLabel} | ${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`);
-            if (ei && ei.authRetried) {
-              log.info('  已通过 CDP 引擎重试认证页面');
-            }
+            log.ok(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`);
             if (e2eResult.servers.alreadyRunning) {
               log.info('  使用已运行的开发服务器');
             }
@@ -1586,7 +1579,7 @@ function cmdDoctor() {
 
   // 检查 E2E 浏览器冒烟就绪状态
   try {
-    const { resolvePlaywright, resolveOpencli } = require('./e2e-smoke');
+    const { resolvePlaywright } = require('./e2e-smoke');
     const pw = resolvePlaywright(projectRoot);
     if (pw && pw.launchOptions) {
       log.ok(`E2E 浏览器冒烟就绪（playwright-core + 系统 Chrome${pw.browserPath ? ': ' + pw.browserPath : ''}）`);
@@ -1595,14 +1588,6 @@ function cmdDoctor() {
       log.info('  安装 Chrome: https://www.google.com/chrome/');
     } else {
       log.warn('E2E 浏览器冒烟不可用：playwright-core 未加载');
-    }
-    // opencli 引擎检测
-    const oc = resolveOpencli();
-    if (oc) {
-      log.ok(`opencli 引擎可用（${oc.type === 'cli' ? 'CLI v' + (oc.version || '?') : '模块'}）— 支持测试登录态页面`);
-      log.info('  启动 Chrome CDP: google-chrome --remote-debugging-port=9222');
-    } else {
-      log.info('opencli 引擎未安装（可选 — npm i -g @jackwener/opencli 后可测试登录态页面）');
     }
   } catch {
     log.info('E2E 检查跳过');

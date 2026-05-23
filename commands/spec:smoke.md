@@ -30,14 +30,7 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 - `--headed`：显示浏览器窗口（调试用）
 - `--base-url http://localhost:5173`：手动指定前端 URL（跳过自动检测）
 - `--backend-url http://localhost:8080`：手动指定后端 URL
-- `--engine auto|playwright|opencli`：选择浏览器引擎（默认 auto）
 - `--no-e2e`：跳过 E2E 浏览器检查
-
-**双引擎说明（v2.4.0）：**
-- **playwright-core**（默认）：headless Chrome，CI 友好，干净会话
-- **opencli/CDP**（增强）：连接已登录的 Chrome，可测试需认证的页面
-- **auto 模式**：先用 playwright 跑全量，再用 CDP 重试登录重定向的页面
-- 使用 opencli 引擎：`npm i -g @jackwener/opencli`，然后 `google-chrome --remote-debugging-port=9222`
 
 **gate 未通过 → 直接进入 /spec:fix，不执行后续步骤。**
 

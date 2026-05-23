@@ -102,22 +102,20 @@ npx @alenfitz/spec-copilot gate <name> smoke
 | Gate | Checks |
 |------|--------|
 | `apply` | Spec completeness + task interleaving + frontend task granularity |
-| `smoke` | **Build verification** + **skeleton detection** + TS any abuse + **Dual-engine E2E browser smoke** |
+| `smoke` | **Build verification** + **skeleton detection** + TS any abuse + **E2E browser smoke** |
 | `review` | Smoke sentinel + feature coverage + dead code + stub handlers + hype language |
 | `archive` | Review sentinel + spec audit conclusion |
 
-### E2E Browser Smoke (v2.3.0 + Dual-Engine v2.4.0)
+### E2E Browser Smoke (v2.3.0)
 
-Dual-engine end-to-end verification — catches "compiles but doesn't work" issues:
+Playwright-based end-to-end verification — catches "compiles but doesn't work" issues:
 
 - **Auto-detects** tech stack (Spring Boot + Vue3, Vite, etc.) and starts dev servers
 - **Spec-driven** route extraction from spec.md + project router files
 - **Checks per page**: white screen, uncaught JS errors, API failures, framework error overlays
-- **Dual-engine**: playwright-core (headless, CI) + opencli/CDP (logged-in Chrome, auth pages)
-- **Auto mode**: playwright runs all pages → auth-gated pages retried via CDP engine
-- **Zero config** for common stacks, flags: `--headed`, `--base-url`, `--engine auto|playwright|opencli`, `--no-e2e`
+- **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
 
-Uses system-installed Chrome — no extra installation needed. Optional: `npm i -g @jackwener/opencli` + `chrome --remote-debugging-port=9222` to test auth-gated pages.
+Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
 
 ## Complexity Tiers
 

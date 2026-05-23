@@ -4,25 +4,13 @@
 
 ---
 
-## [2.4.0] - 2026-05-23
-
-### 新增
-
-**双引擎 E2E 浏览器冒烟 + opencli 集成：**
-
-- **双引擎架构**：opencli/CDP 引擎（已登录 Chrome）+ playwright-core 引擎（headless），自动切换
-- **认证页面测试**：auto 模式下 playwright 检测到登录重定向的页面，自动通过 CDP 引擎重试
-- **`--engine auto|playwright|opencli` 选项**：手动选择浏览器引擎
-- **`connectToLiveChrome()` 函数**：通过 CDP 协议连接已运行的 Chrome 实例
-- **`resolveOpencli()` 函数**：自动检测 opencli CLI 或 Node 模块安装状态
-- **`doctor` 命令增强**：显示 opencli 引擎安装状态和使用指引
-- **引擎信息回报**：E2E 结果包含 `engineInfo` 字段，显示使用的引擎和认证重试信息
+## [2.4.1] - 2026-05-23
 
 ### 变更
 
-- 每个页面检查结果增加 `engine` 字段标记使用的引擎
-- 连接到用户已运行的 Chrome 时不关闭浏览器（`persistent` 标记）
-- smoke 命令文档更新双引擎说明
+- **仓库改名**：`spec_copilit` → `spec_copilot`（修正拼写）
+- 移除 opencli 双引擎代码（实际价值有限，增加不必要复杂度）
+- 保持 playwright-core + 系统 Chrome 单引擎架构，简洁可靠
 
 ---
 

@@ -1,23 +1,20 @@
 /**
- * e2e-smoke.js — 双引擎 E2E 浏览器冒烟模块（v2.4.0）
+ * e2e-smoke.js — E2E 浏览器冒烟模块（v2.4.0）
  *
  * Spec-driven 端到端浏览器验证：
  *   1. 从 spec.md 提取页面路由和 API 端点
  *   2. 自动检测/启动前后端开发服务器
- *   3. 双引擎浏览器检查：
- *      - opencli/CDP 引擎：连接已登录的 Chrome，可测试认证页面
- *      - playwright-core 引擎：headless Chrome，CI 友好
+ *   3. 用 headless Chrome 逐页面检查白屏、JS 异常、API 连接失败
  *   4. 返回结构化结果供 cli.js smoke gate 消费
  *
- * 引擎优先级（auto 模式）：
- *   opencli daemon → Chrome CDP (9222) → playwright-core launch → skip
+ * 内置 playwright-core + 系统 Chrome，用户零额外安装。
  */
 
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const http = require('http');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
 
 // ─── 常量 ────────────────────────────────────────────────────
 
@@ -47,11 +44,6 @@ const BENIGN_CONSOLE_PATTERNS = [
   /Third-party cookie/i,
   /Failed to load resource.*favicon/,
 ];
-
-/** opencli / CDP 连接常量 */
-const OPENCLI_DAEMON_PORT = 19825;
-const CHROME_CDP_PORTS = [9222, 9229];
-const CDP_CONNECT_TIMEOUT = 5000;
 
 /** 技术栈自动检测配置 */
 const STACK_PROFILES = [
@@ -184,77 +176,6 @@ function resolvePlaywright(projectRoot) {
     launchOptions: null, // 标记为找不到浏览器
     browserPath: null,
   };
-}
-
-// ─── opencli / CDP 引擎发现 ─────────────────────────────────
-
-/**
- * 检测 opencli 是否可用
- * @returns {{ type: 'cli'|'module', version?: string }|null}
- */
-function resolveOpencli() {
-  // 方式 1：全局 CLI
-  try {
-    const version = execSync('opencli --version', {
-      timeout: 3000, encoding: 'utf-8', stdio: 'pipe',
-    }).trim();
-    return { type: 'cli', version };
-  } catch { /* not installed globally */ }
-
-  // 方式 2：require 模块（项目本地安装）
-  try {
-    require.resolve('@jackwener/opencli');
-    return { type: 'module' };
-  } catch { /* not installed */ }
-
-  return null;
-}
-
-/**
- * 尝试连接到已运行的 Chrome（通过 CDP 或 opencli daemon）
- *
- * 连接成功后返回一个 Playwright Browser 实例，但底层是用户已登录的真实 Chrome。
- * 这允许我们测试需要认证的页面。
- *
- * @param {object} pw - resolvePlaywright() 返回的对象
- * @returns {Promise<{ browser: object, engine: string, port: number }|null>}
- */
-async function connectToLiveChrome(pw) {
-  if (!pw || !pw.chromium) return null;
-
-  // 1. 尝试 opencli daemon（它的 HTTP 端口可能暴露 CDP）
-  if (await isPortListening(OPENCLI_DAEMON_PORT, '127.0.0.1', 2000)) {
-    // opencli daemon 运行中 — 尝试从 daemon 获取 CDP endpoint
-    try {
-      const infoUrl = `http://127.0.0.1:${OPENCLI_DAEMON_PORT}/json/version`;
-      const statusCode = await httpProbe(infoUrl, 2000);
-      if (statusCode === 200) {
-        // daemon 直接暴露 CDP — 连接
-        const browser = await pw.chromium.connectOverCDP(
-          `http://127.0.0.1:${OPENCLI_DAEMON_PORT}`,
-          { timeout: CDP_CONNECT_TIMEOUT }
-        );
-        return { browser, engine: 'opencli', port: OPENCLI_DAEMON_PORT };
-      }
-    } catch { /* daemon 不支持直连 CDP，继续尝试其他方式 */ }
-  }
-
-  // 2. 尝试直连 Chrome CDP 端口
-  //    用户需用 --remote-debugging-port=9222 启动 Chrome
-  //    或 opencli daemon 已启用 CDP 端口转发
-  for (const port of CHROME_CDP_PORTS) {
-    if (await isPortListening(port, '127.0.0.1', 2000)) {
-      try {
-        const browser = await pw.chromium.connectOverCDP(
-          `http://127.0.0.1:${port}`,
-          { timeout: CDP_CONNECT_TIMEOUT }
-        );
-        return { browser, engine: 'chrome-cdp', port };
-      } catch { /* 该端口不是有效 CDP 端点 */ }
-    }
-  }
-
-  return null;
 }
 
 // ─── 端口探测 ────────────────────────────────────────────────
@@ -737,10 +658,6 @@ async function checkApiEndpoints(backendUrl, apis) {
  * @param {string} [options.baseUrl] - 覆盖自动检测的前端 URL
  * @param {string} [options.backendUrl] - 覆盖自动检测的后端 URL
  * @param {boolean} [options.skipApis=false] - 跳过 API 健康检查
- * @param {string} [options.engine='auto'] - 引擎选择: auto | playwright | opencli
- *   auto: 尝试 opencli/CDP → 回退 playwright-core
- *   playwright: 仅用 playwright-core（headless，干净会话）
- *   opencli: 仅尝试 opencli/CDP（已登录的 Chrome），不回退
  * @returns {Promise<E2ESmokeResult>}
  */
 async function runE2ESmoke(projectRoot, specContent, options = {}) {
@@ -750,35 +667,35 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
     baseUrl: overrideBaseUrl,
     backendUrl: overrideBackendUrl,
     skipApis = false,
-    engine = 'auto',
   } = options;
 
-  // ── Step 1：发现浏览器引擎 ──
+  // ── Step 1：发现 Playwright + 浏览器 ──
   const pw = resolvePlaywright(projectRoot);
-  const opencli = resolveOpencli();
-  const useEngine = engine || 'auto';
-  const playwrightReady = !!(pw && pw.launchOptions !== null);
-
-  // 最低要求：playwright-core 必须可用（所有引擎都通过它操作浏览器）
   if (!pw) {
     return {
-      available: false, pass: undefined,
+      available: false,
+      pass: undefined,
       skipReason: 'playwright-core 加载失败（spec-copilot 安装可能不完整）',
-      pages: [], apiResults: [], consoleErrors: [], servers: {},
+      pages: [],
+      apiResults: [],
+      consoleErrors: [],
+      servers: {},
     };
   }
-
-  // 仅 playwright 模式 / auto 模式：需要系统 Chrome
-  if (useEngine !== 'opencli' && !playwrightReady) {
+  if (pw.launchOptions === null) {
     return {
-      available: false, pass: undefined,
+      available: false,
+      pass: undefined,
       skipReason: '未找到系统 Chrome/Chromium 浏览器',
       installHint: process.platform === 'darwin'
         ? '安装 Chrome: https://www.google.com/chrome/ 或 brew install --cask google-chrome'
         : process.platform === 'linux'
         ? '安装 Chrome: sudo apt install google-chrome-stable 或 sudo snap install chromium'
         : '安装 Chrome: https://www.google.com/chrome/',
-      pages: [], apiResults: [], consoleErrors: [], servers: {},
+      pages: [],
+      apiResults: [],
+      consoleErrors: [],
+      servers: {},
     };
   }
 
@@ -908,53 +825,15 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       }
     }
 
-    // ── Step 6：浏览器测试（双引擎） ──
+    // ── Step 6：浏览器测试 ──
     let browser;
-    let activeEngine = 'playwright';
-    let persistent = false; // 是否连接到用户已运行的浏览器（不能关闭）
-    let authGatedPages = []; // 需要认证的页面（可通过 opencli/CDP 重试）
-
     try {
-      // ── 引擎选择 ──
-      //   auto:    尝试 CDP 连接（opencli/已运行Chrome）→ 回退 playwright launch
-      //   opencli: 仅 CDP 连接
-      //   playwright: 仅 playwright launch
-      if (useEngine === 'auto' || useEngine === 'opencli') {
-        const live = await connectToLiveChrome(pw);
-        if (live) {
-          browser = live.browser;
-          activeEngine = live.engine;
-          persistent = true;
-        } else if (useEngine === 'opencli') {
-          return {
-            available: true, pass: undefined,
-            skipReason: '无法连接到已运行的 Chrome（需启动 Chrome 并开启 --remote-debugging-port=9222，或启动 opencli daemon）',
-            pages: [], apiResults: [], consoleErrors: [], servers: serverInfo,
-            engineInfo: { requested: 'opencli', opencliInstalled: !!opencli },
-          };
-        }
-        // auto 模式下 CDP 不可用 → 走 playwright launch
-      }
+      browser = await pw.chromium.launch({
+        ...pw.launchOptions,
+        headless: !headed,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+      });
 
-      if (!browser && playwrightReady) {
-        browser = await pw.chromium.launch({
-          ...pw.launchOptions,
-          headless: !headed,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
-        });
-        activeEngine = 'playwright';
-        persistent = false;
-      }
-
-      if (!browser) {
-        return {
-          available: true, pass: undefined,
-          skipReason: '无法启动浏览器',
-          pages: [], apiResults: [], consoleErrors: [], servers: serverInfo,
-        };
-      }
-
-      // ── 创建上下文 + 逐页面检查 ──
       const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },
         ignoreHTTPSErrors: true,
@@ -966,43 +845,13 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
 
       for (const routeInfo of testablePages) {
         const result = await checkPage(page, frontendUrl, routeInfo, timeout);
-        result.engine = activeEngine;
         pageResults.push(result);
         if (result.warnings) {
           allConsoleErrors.push(...result.warnings.filter(w => w.includes('控制台错误')));
         }
-        if (result.authGated) {
-          authGatedPages.push(routeInfo);
-        }
       }
 
       await context.close();
-
-      // ── 认证页面重试（auto 模式：playwright 跑完后用 CDP 重测 authGated 页面） ──
-      if (authGatedPages.length > 0 && activeEngine === 'playwright' && useEngine === 'auto') {
-        const live = await connectToLiveChrome(pw);
-        if (live) {
-          const liveCtx = await live.browser.newContext({
-            viewport: { width: 1280, height: 800 },
-            ignoreHTTPSErrors: true,
-          });
-          const livePage = await liveCtx.newPage();
-
-          for (const routeInfo of authGatedPages) {
-            const result = await checkPage(livePage, frontendUrl, routeInfo, timeout);
-            result.engine = live.engine;
-            result.authRetry = true;
-            // 用 CDP 结果替换原来的 authGated 结果
-            const idx = pageResults.findIndex(p => p.route === routeInfo.route);
-            if (idx !== -1) {
-              pageResults[idx] = result;
-            }
-          }
-
-          await liveCtx.close();
-          // 注意：不关闭用户的浏览器
-        }
-      }
 
       // ── 汇总结果 ──
       const failedPages = pageResults.filter(p => !p.pass);
@@ -1016,11 +865,6 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         apiResults,
         consoleErrors: allConsoleErrors,
         servers: serverInfo,
-        engineInfo: {
-          primary: activeEngine,
-          opencliInstalled: !!opencli,
-          authRetried: authGatedPages.length > 0,
-        },
         summary: {
           totalPages: testablePages.length,
           passedPages: testablePages.length - failedPages.length,
@@ -1032,7 +876,7 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       };
 
     } finally {
-      if (browser && !persistent) {
+      if (browser) {
         try { await browser.close(); } catch { /* ignore */ }
       }
     }
@@ -1050,8 +894,6 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
 module.exports = {
   runE2ESmoke,
   resolvePlaywright,
-  resolveOpencli,
-  connectToLiveChrome,
   extractSpecRoutes,
   resolveRoutesFromProject,
 };
