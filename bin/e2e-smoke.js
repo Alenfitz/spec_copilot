@@ -1,12 +1,18 @@
 /**
- * e2e-smoke.js — E2E 浏览器冒烟模块（v2.4.0）
+ * e2e-smoke.js — E2E 浏览器冒烟模块（v2.7.0）
  *
  * Spec-driven 端到端浏览器验证：
  *   1. 从 spec.md 提取页面路由和 API 端点
  *   2. 自动检测/启动前后端开发服务器
- *   3. 用 headless Chrome 逐页面检查白屏、JS 异常、API 连接失败
+ *   3. 用 headless Chrome 逐页面检查：
+ *      - 白屏、JS 异常、框架错误遮罩
+ *      - API 4xx/5xx 响应（前后端对不上）
+ *      - API 返回非 JSON（后端报错返回 HTML）
+ *      - 空数据渲染（列表页无数据、空状态组件）
+ *      - 控制台 API 相关错误
  *   4. 返回结构化结果供 cli.js smoke gate 消费
  *
+ * v2.7.0: 从"页面能打开"升级到"前后端联调真正跑通"
  * 内置 playwright-core + 系统 Chrome，用户零额外安装。
  */
 
@@ -440,8 +446,27 @@ function isBenignConsoleMsg(text) {
   return BENIGN_CONSOLE_PATTERNS.some(p => p.test(text));
 }
 
+/** API 相关的控制台错误关键词 — 从 warning 提升为 failure */
+const API_ERROR_KEYWORDS = [
+  /failed to fetch/i,
+  /network\s*error/i,
+  /ERR_CONNECTION_REFUSED/i,
+  /ECONNREFUSED/i,
+  /404\s*not\s*found/i,
+  /axios.*error/i,
+  /request.*failed/i,
+  /api.*error/i,
+  /Cannot read propert.*of (null|undefined)/i, // 常见的 API 返回格式不对导致的前端崩溃
+  /TypeError.*undefined is not/i,
+];
+
 /**
- * 对单个页面执行浏览器检查
+ * 对单个页面执行浏览器检查（v2.7.0 增强版）
+ *
+ * 检查维度：
+ *   L1 基础：白屏、HTTP 状态码、框架错误遮罩、未捕获异常
+ *   L2 联调：API 4xx/5xx、API 返回非 JSON、空数据渲染、控制台 API 错误
+ *
  * @returns {Promise<PageResult>}
  */
 async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
@@ -452,17 +477,25 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
     failures: [],
     warnings: [],
     loadTimeMs: 0,
+    apiInteractions: [],  // v2.7.0: 记录所有 API 交互
   };
 
   const consoleErrors = [];
+  const consoleApiErrors = [];   // v2.7.0: API 相关的控制台错误单独跟踪
   const networkFailures = [];
   const pageErrors = [];
+  const apiResponses = [];       // v2.7.0: 收集所有 API 响应详情
 
   // 监听控制台
   const onConsole = (msg) => {
     if (msg.type() === 'error') {
       const text = msg.text();
-      if (!isBenignConsoleMsg(text)) {
+      if (isBenignConsoleMsg(text)) return;
+
+      // v2.7.0: API 相关错误单独归类（将升级为 failure）
+      if (API_ERROR_KEYWORDS.some(p => p.test(text))) {
+        consoleApiErrors.push(text.slice(0, 200));
+      } else {
         consoleErrors.push(text.slice(0, 200));
       }
     }
@@ -478,7 +511,6 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
   // 监听网络请求失败
   const onRequestFailed = (req) => {
     const url = req.url();
-    // 只关心后端 API 请求失败
     if (url.includes('/api/') && !isBenignConsoleMsg(url)) {
       const failure = req.failure();
       networkFailures.push(`${req.method()} ${url}: ${failure ? failure.errorText : 'unknown'}`);
@@ -486,13 +518,37 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
   };
   page.on('requestfailed', onRequestFailed);
 
-  // 监听 API 响应状态码
-  const apiErrors = [];
-  const onResponse = (res) => {
+  // v2.7.0: 监听所有 API 响应（4xx + 5xx + 非 JSON 检测）
+  const onResponse = async (res) => {
     const url = res.url();
-    if (url.includes('/api/') && res.status() >= 500) {
-      apiErrors.push(`${res.status()} ${res.url().slice(0, 120)}`);
+    if (!url.includes('/api/')) return;
+
+    const status = res.status();
+    const info = {
+      method: res.request().method(),
+      url: url.slice(0, 150),
+      status,
+      contentType: '',
+      isJson: true,
+      error: null,
+    };
+
+    try {
+      const contentType = res.headers()['content-type'] || '';
+      info.contentType = contentType.slice(0, 80);
+
+      // v2.7.0: 检测后端返回 HTML 而不是 JSON（常见联调问题：接口不存在时后端返回 404 HTML 页面）
+      if (status >= 200 && status < 300 && contentType && !contentType.includes('json')) {
+        info.isJson = false;
+        info.error = `API 返回非 JSON（Content-Type: ${contentType.slice(0, 50)}）`;
+      }
+    } catch { /* headers 读取失败时静默 */ }
+
+    if (status >= 400) {
+      info.error = `HTTP ${status}`;
     }
+
+    apiResponses.push(info);
   };
   page.on('response', onResponse);
 
@@ -512,7 +568,6 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
 
     // ── Check 1：HTTP 状态码 ──
     if (response && response.status() >= 400) {
-      // 检查是否是 SPA 的 history fallback（返回 index.html 的 200）
       const finalUrl = page.url();
       if (!finalUrl.includes('/login') && !finalUrl.includes('/auth')) {
         result.failures.push(`HTTP ${response.status()} 响应`);
@@ -542,18 +597,12 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
 
     // ── Check 3：框架错误遮罩 ──
     const hasErrorOverlay = await page.evaluate(() => {
-      // Vite error overlay
       const viteOverlay = document.querySelector('vite-error-overlay');
-      // React error overlay
       const reactOverlay = document.querySelector('#webpack-dev-server-client-overlay') ||
                            document.querySelector('[data-reactroot] + div[style*="position: fixed"]');
-      // Vue error
       const vueError = document.querySelector('.vue-server-renderer-error');
-      // Spring Boot Whitelabel
       const whitelabel = document.body.innerText.includes('Whitelabel Error Page');
-      // "Cannot GET"
       const cannotGet = document.body.innerText.includes('Cannot GET');
-
       return !!(viteOverlay || reactOverlay || vueError || whitelabel || cannotGet);
     });
     if (hasErrorOverlay) {
@@ -565,7 +614,6 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
     if (finalUrl.includes('/login') || finalUrl.includes('/auth')) {
       if (routeInfo.route !== '/login' && routeInfo.route !== '/auth') {
         result.warnings.push(`重定向到登录页（${finalUrl}）— 页面可达但需认证`);
-        // 登录重定向不算失败
         result.authGated = true;
       }
     }
@@ -575,25 +623,112 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
       result.failures.push(`${pageErrors.length} 个未捕获 JS 异常: ${pageErrors.slice(0, 3).join('; ')}`);
     }
 
-    // ── Check 6：API 网络失败 ──
+    // ── Check 6：API 网络失败（连接被拒 = 后端没启动或接口不存在） ──
     if (networkFailures.length > 0) {
       result.failures.push(`${networkFailures.length} 个 API 请求失败: ${networkFailures.slice(0, 3).join('; ')}`);
     }
 
-    // ── Check 7：API 5xx ──
-    if (apiErrors.length > 0) {
-      result.failures.push(`${apiErrors.length} 个 API 返回 5xx: ${apiErrors.slice(0, 3).join('; ')}`);
+    // ── Check 7：API 4xx/5xx 响应（v2.7.0 增强：4xx 也是失败） ──
+    const api4xx = apiResponses.filter(a => a.status >= 400 && a.status < 500);
+    const api5xx = apiResponses.filter(a => a.status >= 500);
+
+    if (api5xx.length > 0) {
+      result.failures.push(`${api5xx.length} 个 API 返回 5xx（后端异常）: ${api5xx.slice(0, 3).map(a => `${a.status} ${a.method} ${a.url.split('?')[0]}`).join('; ')}`);
+    }
+    if (api4xx.length > 0) {
+      // 401/403 在非 authGated 页面是失败，在 authGated 页面是预期
+      const realErrors = result.authGated
+        ? api4xx.filter(a => a.status !== 401 && a.status !== 403)
+        : api4xx;
+      if (realErrors.length > 0) {
+        result.failures.push(`${realErrors.length} 个 API 返回 4xx（前后端不匹配）: ${realErrors.slice(0, 3).map(a => `${a.status} ${a.method} ${a.url.split('?')[0]}`).join('; ')}`);
+      }
     }
 
-    // ── Check 8：控制台错误（warning 级） ──
+    // ── Check 8：API 返回非 JSON（v2.7.0 新增） ──
+    const nonJsonApis = apiResponses.filter(a => !a.isJson && a.status >= 200 && a.status < 300);
+    if (nonJsonApis.length > 0) {
+      result.failures.push(`${nonJsonApis.length} 个 API 返回非 JSON（后端可能返回了 HTML 错误页）: ${nonJsonApis.slice(0, 3).map(a => `${a.method} ${a.url.split('?')[0]} → ${a.contentType}`).join('; ')}`);
+    }
+
+    // ── Check 9：空数据渲染检测（v2.7.0 新增） ──
+    // 页面有 API 调用且成功，但渲染出空状态 → 数据格式对不上
+    if (!result.authGated) {
+      const emptyStateInfo = await page.evaluate(() => {
+        // Element Plus / Ant Design 空状态组件
+        const emptyComponents = document.querySelectorAll(
+          '.el-empty, .ant-empty, .a-empty, [class*="empty-state"], [class*="no-data"], [class*="noData"]'
+        );
+        // 常见空状态文案
+        const bodyText = document.body.innerText || '';
+        const emptyTextPatterns = [
+          '暂无数据', '暂无内容', '没有数据', '无数据', 'No data', 'No results',
+          '暂无记录', '没有记录', '数据为空', '列表为空',
+        ];
+        const hasEmptyText = emptyTextPatterns.some(p => bodyText.includes(p));
+
+        // 空表格检测：有表头但无数据行
+        const tables = document.querySelectorAll('.el-table, .ant-table, table');
+        let emptyTableCount = 0;
+        tables.forEach(t => {
+          const headerCells = t.querySelectorAll('th, .el-table__header-wrapper th');
+          const bodyRows = t.querySelectorAll('tbody tr, .el-table__body-wrapper tbody tr');
+          // 有表头但 body 为空或只有一行"暂无数据"
+          if (headerCells.length > 0 && bodyRows.length <= 1) {
+            const rowText = bodyRows.length === 1 ? (bodyRows[0].innerText || '').trim() : '';
+            if (bodyRows.length === 0 || emptyTextPatterns.some(p => rowText.includes(p))) {
+              emptyTableCount++;
+            }
+          }
+        });
+
+        return {
+          emptyComponentCount: emptyComponents.length,
+          hasEmptyText,
+          emptyTableCount,
+        };
+      });
+
+      // 有成功的 API 调用 + 页面显示空状态 → 数据格式可能对不上
+      const successApiCount = apiResponses.filter(a => a.status >= 200 && a.status < 300 && a.isJson).length;
+      if (successApiCount > 0) {
+        if (emptyStateInfo.emptyTableCount > 0) {
+          result.failures.push(`${emptyStateInfo.emptyTableCount} 个表格有表头但无数据（API 有响应但数据未渲染 — 检查字段映射）`);
+        }
+        if (emptyStateInfo.emptyComponentCount > 0 && !emptyStateInfo.emptyTableCount) {
+          result.warnings.push(`检测到 ${emptyStateInfo.emptyComponentCount} 个空状态组件（API 有响应但页面显示为空 — 可能是字段映射问题）`);
+        }
+      } else if (apiResponses.length === 0 && !result.authGated) {
+        // 页面没有发任何 API 请求 — 可能用了 mock 数据
+        if (emptyStateInfo.hasEmptyText || emptyStateInfo.emptyComponentCount > 0) {
+          result.warnings.push('页面未发起任何 API 请求且显示空状态 — 可能使用了 mock 数据或未对接接口');
+        }
+      }
+    }
+
+    // ── Check 10：控制台 API 相关错误（v2.7.0：升级为 failure） ──
+    if (consoleApiErrors.length > 0) {
+      result.failures.push(`${consoleApiErrors.length} 个控制台 API 错误: ${consoleApiErrors.slice(0, 3).join('; ')}`);
+    }
+
+    // ── Check 11：控制台其他错误（warning 级） ──
     if (consoleErrors.length > 0) {
       result.warnings.push(`${consoleErrors.length} 个控制台错误: ${consoleErrors.slice(0, 3).join('; ')}`);
     }
 
-    // ── Check 9：慢加载（warning 级） ──
+    // ── Check 12：慢加载（warning 级） ──
     if (result.loadTimeMs > 10000) {
       result.warnings.push(`页面加载耗时 ${Math.round(result.loadTimeMs / 1000)}s（> 10s）`);
     }
+
+    // v2.7.0: 记录 API 交互摘要
+    result.apiInteractions = apiResponses.map(a => ({
+      method: a.method,
+      url: a.url.split('?')[0],
+      status: a.status,
+      isJson: a.isJson,
+      error: a.error,
+    }));
 
   } catch (err) {
     if (err.name === 'TimeoutError') {
@@ -857,12 +992,24 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       const failedPages = pageResults.filter(p => !p.pass);
       const failedApis = apiResults.filter(a => !a.pass);
 
+      // v2.7.0: 汇总所有页面的 API 交互
+      const allApiInteractions = pageResults.flatMap(p => p.apiInteractions || []);
+      const apiInteractionSummary = {
+        total: allApiInteractions.length,
+        ok: allApiInteractions.filter(a => a.status >= 200 && a.status < 400 && a.isJson).length,
+        client4xx: allApiInteractions.filter(a => a.status >= 400 && a.status < 500).length,
+        server5xx: allApiInteractions.filter(a => a.status >= 500).length,
+        nonJson: allApiInteractions.filter(a => !a.isJson && a.status >= 200 && a.status < 300).length,
+        failed: allApiInteractions.filter(a => a.status === 0).length,
+      };
+
       return {
         available: true,
         pass: failedPages.length === 0 && failedApis.filter(a => a.status === 0 || a.status >= 500).length === 0,
         skipReason: null,
         pages: pageResults,
         apiResults,
+        apiInteractionSummary,  // v2.7.0
         consoleErrors: allConsoleErrors,
         servers: serverInfo,
         summary: {

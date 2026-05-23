@@ -580,6 +580,11 @@ async function cmdGate(args) {
           } else if (e2eResult.pass) {
             const s = e2eResult.summary;
             log.ok(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`);
+            // v2.7.0: 显示 API 交互摘要
+            if (e2eResult.apiInteractionSummary && e2eResult.apiInteractionSummary.total > 0) {
+              const ai = e2eResult.apiInteractionSummary;
+              log.info(`  API 交互: ${ai.total} 请求（${ai.ok} 正常${ai.client4xx ? ` / ${ai.client4xx} 4xx` : ''}${ai.server5xx ? ` / ${ai.server5xx} 5xx` : ''}${ai.nonJson ? ` / ${ai.nonJson} 非JSON` : ''}）`);
+            }
             if (e2eResult.servers.alreadyRunning) {
               log.info('  使用已运行的开发服务器');
             }
@@ -601,7 +606,12 @@ async function cmdGate(args) {
             for (const a of failedApis) {
               details.push(`API ${a.method} ${a.path}: ${a.error || 'HTTP ' + a.status}`);
             }
-            fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 15).join('\n   ')}${details.length > 15 ? `\n   ... 还有 ${details.length - 15} 项` : ''}`);
+            // v2.7.0: 显示 API 交互摘要
+            if (e2eResult.apiInteractionSummary && e2eResult.apiInteractionSummary.total > 0) {
+              const ai = e2eResult.apiInteractionSummary;
+              details.push(`── API 交互摘要: ${ai.total} 请求（${ai.ok} 正常 / ${ai.client4xx} 4xx / ${ai.server5xx} 5xx / ${ai.nonJson} 非JSON / ${ai.failed} 连接失败）`);
+            }
+            fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`);
           }
         } catch (e) {
           log.warn(`E2E 浏览器冒烟跳过：${e.message.split('\n')[0]}`);
