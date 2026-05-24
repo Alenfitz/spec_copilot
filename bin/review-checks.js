@@ -67,7 +67,8 @@ function uniq(arr) {
 function extractSpecApis(specContent) {
   const apis = [];
   const seen = new Set();
-  const apiRegex = /(GET|POST|PUT|DELETE|PATCH)\s+(\/api\/[^\s|,)）\]]+)/g;
+  // 字符类排除：空白、|、,、)、）、]、`（修复："`POST /api/foo`" 写法时 backtick 被吃进路径）
+  const apiRegex = /(GET|POST|PUT|DELETE|PATCH)\s+(\/api\/[^\s|,)）\]`]+)/g;
   let m;
   while ((m = apiRegex.exec(specContent)) !== null) {
     const key = `${m[1]} ${m[2]}`;
@@ -96,37 +97,72 @@ function extractSpecRoutes(specContent) {
   return routes;
 }
 
+/**
+ * 把 markdown 表格行解析为 cell 数组
+ * 处理 `|` 分隔、首尾分隔符、转义、以及 cell 内的反引号
+ */
+function parseTableRow(line) {
+  if (!/^\s*\|.*\|\s*$/.test(line)) return null;
+  // 跳过分隔行（| --- | --- |）
+  if (/^\s*\|\s*[-:|\s]+\|?\s*$/.test(line)) return null;
+  return line.split('|').slice(1, -1).map(c => c.trim());
+}
+
+/**
+ * 业务规则矩阵 — 位置式解析
+ * v3: 6 列（id/desc/layer/trigger/outcome/verification）
+ * v4: 已删除矩阵（只在 §4 用 bullet 列出）
+ */
 function extractRuleMatrix(specContent) {
   const rows = [];
-  const regex = /^\|\s*(V\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
-  let m;
-  while ((m = regex.exec(specContent)) !== null) {
+  for (const line of specContent.split('\n')) {
+    const cells = parseTableRow(line);
+    if (!cells || cells.length < 5) continue;
+    if (!/^V\d+$/.test(cells[0])) continue;
     rows.push({
-      id: m[1].trim(),
-      description: m[2].trim(),
-      layer: m[3].trim(),
-      trigger: m[4].trim(),
-      outcome: m[5].trim(),
-      verification: m[6].trim(),
+      id: cells[0],
+      description: cells[1] || '',
+      layer: cells[2] || '',
+      trigger: cells[3] || '',
+      outcome: cells[4] || '',
+      verification: cells[5] || '',  // v3 6 列时存在；v4 没有矩阵，此函数返回空
     });
   }
   return rows;
 }
 
+/**
+ * 接口覆盖矩阵 — 位置式解析，兼容 v3 / v4 schema
+ * v3: 7 列（id/method/path/frontendCaller/backendEntry/requestStyle/responseStyle）
+ * v4: 6 列（id/method/path/frontendCaller/backendEntry/featurePoint）
+ * 最低要求：前 5 列（id/method/path/frontendCaller/backendEntry）
+ */
 function extractApiCoverageMatrix(specContent) {
   const rows = [];
-  const regex = /^\|\s*(API\d+)\s*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
-  let m;
-  while ((m = regex.exec(specContent)) !== null) {
-    rows.push({
-      id: m[1].trim(),
-      method: m[2].trim().toUpperCase(),
-      path: m[3].trim(),
-      frontendCaller: m[4].trim().replace(/[`]/g, ''),
-      backendEntry: m[5].trim().replace(/[`]/g, ''),
-      requestStyle: m[6].trim(),
-      responseStyle: m[7].trim(),
-    });
+  for (const line of specContent.split('\n')) {
+    const cells = parseTableRow(line);
+    if (!cells || cells.length < 5) continue;
+    if (!/^API\d+$/.test(cells[0])) continue;
+    if (!/^(GET|POST|PUT|DELETE|PATCH)$/i.test(cells[1])) continue;
+    const row = {
+      id: cells[0],
+      method: cells[1].toUpperCase(),
+      path: cells[2],
+      frontendCaller: (cells[3] || '').replace(/[`]/g, ''),
+      backendEntry: (cells[4] || '').replace(/[`]/g, ''),
+      requestStyle: '',
+      responseStyle: '',
+      featurePoint: '',
+    };
+    if (cells.length >= 7) {
+      // v3 schema: 6 = requestStyle, 7 = responseStyle
+      row.requestStyle = cells[5] || '';
+      row.responseStyle = cells[6] || '';
+    } else if (cells.length === 6) {
+      // v4 schema: 6 = featurePoint (F01, F02...)
+      row.featurePoint = cells[5] || '';
+    }
+    rows.push(row);
   }
   return rows;
 }
@@ -166,17 +202,25 @@ function extractRuleCheckBlocks(specContent) {
   return blocks;
 }
 
+/**
+ * 接口字段清单（§6.2，可选）— 位置式解析
+ * 5 列：id / requiredFields / optionalFields / responseFields / errorFields
+ * 注意：第 2 列必须不是 HTTP method（避免与接口覆盖矩阵冲突）
+ */
 function extractApiFieldChecklist(specContent) {
   const rows = [];
-  const regex = /^\|\s*(API\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
-  let m;
-  while ((m = regex.exec(specContent)) !== null) {
+  for (const line of specContent.split('\n')) {
+    const cells = parseTableRow(line);
+    if (!cells || cells.length < 5) continue;
+    if (!/^API\d+$/.test(cells[0])) continue;
+    // 跳过接口覆盖矩阵：cells[1] 是 HTTP method
+    if (/^(GET|POST|PUT|DELETE|PATCH)$/i.test(cells[1])) continue;
     rows.push({
-      id: m[1].trim(),
-      requiredFields: m[2].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
-      optionalFields: m[3].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
-      responseFields: m[4].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
-      errorFields: m[5].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      id: cells[0],
+      requiredFields: cells[1].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      optionalFields: cells[2].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      responseFields: cells[3].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      errorFields: cells[4].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
     });
   }
   return rows;

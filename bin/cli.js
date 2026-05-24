@@ -32,6 +32,12 @@ const {
   checkContractConsistency,
   checkHardcodedIdentities,
 } = require('./review-checks');
+const {
+  copyDir,
+  cleanupLegacyColonCommands,
+  rmDirRecursive,
+  countMdFiles,
+} = require('./fs-utils');
 
 // ─── 常量 ───────────────────────────────────────────────────
 
@@ -47,35 +53,6 @@ const log = {
   info(msg) { console.log(`  ${msg}`); },
   title(msg){ console.log(`\n\x1b[1m${msg}\x1b[0m`); },
 };
-
-function copyDir(src, dest, options = {}) {
-  const { overwrite = true, exclude = [] } = options;
-  if (!fs.existsSync(src)) return;
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (exclude.includes(entry.name)) continue;
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath, options);
-    } else if (overwrite || !fs.existsSync(destPath)) {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-function rmDirRecursive(dirPath) {
-  if (!fs.existsSync(dirPath)) return;
-  for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-    const p = path.join(dirPath, entry.name);
-    if (entry.isDirectory()) {
-      rmDirRecursive(p);
-    } else {
-      fs.unlinkSync(p);
-    }
-  }
-  fs.rmdirSync(dirPath);
-}
 
 function findProjectRoot(startDir = process.cwd()) {
   let dir = path.resolve(startDir);
@@ -344,7 +321,9 @@ function cmdInstall(args) {
 
   // 5. 安装命令文件（通用 + 各工具专属）
   const commandsSrc = path.join(srcRoot, 'commands');
-  copyDir(commandsSrc, path.join(scDir, 'commands'));
+  const scCommandsDir = path.join(scDir, 'commands');
+  cleanupLegacyColonCommands(scCommandsDir);
+  copyDir(commandsSrc, scCommandsDir);
 
   // 6. 为每个目标工具安装适配
   const rawPrompt = renderPromptTemplate();
@@ -356,19 +335,10 @@ function cmdInstall(args) {
 
     // 6a. 原生命令目录
     // commands 现在用目录式命名（v4.0.3+）：commands/spec/<name>.md → /spec:<name>
-    // 计数：递归找所有 .md 文件
-    const countMdFiles = (dir) => {
-      let n = 0;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.isDirectory()) n += countMdFiles(path.join(dir, entry.name));
-        else if (entry.name.endsWith('.md')) n += 1;
-      }
-      return n;
-    };
-
     if (adapter.hasNativeCommands && adapter.commandsDir) {
       const cmdDest = path.join(projectRoot, adapter.commandsDir);
       fs.mkdirSync(cmdDest, { recursive: true });
+      cleanupLegacyColonCommands(cmdDest);
       copyDir(commandsSrc, cmdDest);
       const cmdCount = countMdFiles(commandsSrc);
       log.ok(`${adapter.commandsDir}/ 已安装（${cmdCount} 个斜杠命令）`);
@@ -497,10 +467,13 @@ function cmdUpdate(args) {
 
   // 更新命令
   const commandsSrc = path.join(srcRoot, 'commands');
-  copyDir(commandsSrc, path.join(scDir, 'commands'));
+  const scCommandsDir = path.join(scDir, 'commands');
+  cleanupLegacyColonCommands(scCommandsDir);
+  copyDir(commandsSrc, scCommandsDir);
   if (adapter.hasNativeCommands && adapter.commandsDir) {
     const cmdDest = path.join(projectRoot, adapter.commandsDir);
     fs.mkdirSync(cmdDest, { recursive: true });
+    cleanupLegacyColonCommands(cmdDest);
     copyDir(commandsSrc, cmdDest);
     log.ok(`${adapter.commandsDir}/ 已更新`);
   }
@@ -2569,6 +2542,7 @@ function cmdSync(args) {
     if (adapter.hasNativeCommands && adapter.commandsDir) {
       const cmdDest = path.join(projectRoot, adapter.commandsDir);
       fs.mkdirSync(cmdDest, { recursive: true });
+      cleanupLegacyColonCommands(cmdDest);
       copyDir(commandsSrc, cmdDest);
       log.ok(`${adapter.commandsDir}/ 已同步`);
     }

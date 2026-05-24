@@ -77,6 +77,7 @@ function copyDir(src, dest) {
 // Obfuscate JS files
 console.log('Obfuscating JS...');
 obfuscateFile(path.join(root, 'bin', 'cli.js'), path.join(dist, 'bin', 'cli.js'));
+obfuscateFile(path.join(root, 'bin', 'fs-utils.js'), path.join(dist, 'bin', 'fs-utils.js'));
 obfuscateFile(path.join(root, 'bin', 'frontend-checks.js'), path.join(dist, 'bin', 'frontend-checks.js'));
 obfuscateFile(path.join(root, 'bin', 'e2e-smoke.js'), path.join(dist, 'bin', 'e2e-smoke.js'));
 obfuscateFile(path.join(root, 'bin', 'guard.js'), path.join(dist, 'bin', 'guard.js'));

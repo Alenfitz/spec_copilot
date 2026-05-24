@@ -92,6 +92,27 @@ test('install: commands 中包含 spec/lite（v4.0.3+ 目录式命名）', () =>
   }
 });
 
+test('update --force: 清理 v4.0.3 前的 spec:xxx 旧命令文件', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool claude-code');
+    const legacyProjectCommand = path.join(dir, 'spec_copilot', 'commands', 'spec:apply.md');
+    const legacyNativeCommand = path.join(dir, '.claude', 'commands', 'spec:apply.md');
+    fs.writeFileSync(legacyProjectCommand, 'legacy project command', 'utf-8');
+    fs.writeFileSync(legacyNativeCommand, 'legacy native command', 'utf-8');
+
+    const out = runIn(dir, 'update --force --tool claude-code');
+    assert.ok(typeof out === 'string', `update 失败: ${JSON.stringify(out)}`);
+
+    assert.ok(!fs.existsSync(legacyProjectCommand), 'spec_copilot/commands/spec:apply.md 应被清理');
+    assert.ok(!fs.existsSync(legacyNativeCommand), '.claude/commands/spec:apply.md 应被清理');
+    assert.ok(fs.existsSync(path.join(dir, 'spec_copilot', 'commands', 'spec', 'apply.md')), '目录式项目命令应保留');
+    assert.ok(fs.existsSync(path.join(dir, '.claude', 'commands', 'spec', 'apply.md')), '目录式原生命令应保留');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('install --tool all: 多工具同时安装', () => {
   const dir = mkTmp();
   try {
