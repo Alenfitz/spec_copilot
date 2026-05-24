@@ -65,6 +65,7 @@ RULE-CHECK:
 > 3. `kind` 先使用统一枚举：`required` / `enum` / `compare_datetime` / `state_transition` / `idempotent`。
 > 4. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
 > 5. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到，并能落到绑定接口的前端调用方 / 后端实现入口。
+> 6. 如果希望 `smoke/e2e` 也消费这条规则，应尽量让对应 AC 场景真实触发该 `api: APIxx`，这样 gate 才能收集运行时证据。
 
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |

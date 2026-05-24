@@ -785,6 +785,13 @@ async function cmdGate(args) {
                 }
               }
             }
+            if (e2eResult.ruleRuntimeSummary && e2eResult.ruleRuntimeSummary.total > 0) {
+              const rr = e2eResult.ruleRuntimeSummary;
+              log.ok(`  RULE-CHECK 运行时证据: ${rr.covered}/${rr.total} 完整闭环${rr.partial ? ` / ${rr.partial} 部分闭环` : ''}${rr.missing ? ` / ${rr.missing} 未闭环` : ''}`);
+              for (const w of rr.warnings.slice(0, 6)) {
+                log.warn(`  ${w}`);
+              }
+            }
             // v3.0.0: 显示 API Schema 校验结果
             if (e2eResult.schemaViolations && e2eResult.schemaViolations.length > 0) {
               for (const v of e2eResult.schemaViolations) {
@@ -834,6 +841,18 @@ async function cmdGate(args) {
               for (const s of (ac.scenarios || []).filter(item => item.status !== 'covered').slice(0, 6)) {
                 const stepPart = s.totalStepCount > 0 ? ` / 步骤 ${s.matchedStepCount}/${s.totalStepCount}` : '';
                 details.push(`${s.id}(${s.type}${stepPart}): 缺少 ${s.missing.join('、')}`);
+              }
+            }
+            if (e2eResult.ruleRuntimeSummary) {
+              const rr = e2eResult.ruleRuntimeSummary;
+              if (rr.total > 0) {
+                details.push(`── RULE-CHECK 运行时证据: ${rr.covered}/${rr.total} 完整闭环 / ${rr.partial} 部分闭环 / ${rr.missing} 未闭环`);
+              }
+              for (const f of rr.failures.slice(0, 6)) {
+                details.push(`RULE-CHECK Gate: ${f}`);
+              }
+              for (const w of rr.warnings.slice(0, 4)) {
+                details.push(`RULE-CHECK Warn: ${w}`);
               }
             }
             fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`);

@@ -411,6 +411,237 @@ function validateApiSchema(specSchema, actualJson) {
   return { pass: missing.length === 0, missing };
 }
 
+function normalizeApiPath(pathname) {
+  return pathname.replace(/\{[^}]+\}/g, '').replace(/:[a-zA-Z_][\w-]*/g, '').replace(/\/+$/, '');
+}
+
+function extractApiCoverageMatrix(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(API\d+)\s*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      method: m[2].trim().toUpperCase(),
+      path: m[3].trim(),
+      frontendCaller: m[4].trim().replace(/[`]/g, ''),
+      backendEntry: m[5].trim().replace(/[`]/g, ''),
+      requestStyle: m[6].trim(),
+      responseStyle: m[7].trim(),
+    });
+  }
+  return rows;
+}
+
+function extractRuleCheckBlocks(specContent) {
+  const blocks = [];
+  const regex = /```ya?ml\s+RULE-CHECK:\s*([\s\S]*?)```/g;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    const body = m[1];
+    const get = (name) => {
+      const mm = body.match(new RegExp(`\\b${name}:\\s*["']?([^\\n"']+)["']?`));
+      return mm ? mm[1].trim() : '';
+    };
+    blocks.push({
+      raw: body,
+      id: get('id'),
+      apiId: get('api'),
+      kind: get('kind'),
+      when: get('when'),
+      left: get('left'),
+      op: get('op'),
+      right: get('right'),
+      success: get('success'),
+      errorMessage: get('error_message'),
+    });
+  }
+  return blocks;
+}
+
+function extractRequestFieldsFromUrl(url) {
+  try {
+    return [...new URL(url).searchParams.keys()].filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function extractRequestFieldsFromBody(rawBody) {
+  if (!rawBody || typeof rawBody !== 'string') return [];
+  const trimmed = rawBody.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.keys(parsed);
+    }
+  } catch { /* ignore */ }
+  try {
+    return [...new URLSearchParams(trimmed).keys()].filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function buildApiInteractionSnapshot(res) {
+  const request = res.request();
+  const url = res.url();
+  const rawBody = request.postData() || '';
+  const requestFields = [
+    ...extractRequestFieldsFromUrl(url),
+    ...extractRequestFieldsFromBody(rawBody),
+  ].filter((item, idx, arr) => item && arr.indexOf(item) === idx);
+
+  let responseMessage = '';
+  let responsePreview = '';
+  try {
+    const contentType = res.headers()['content-type'] || '';
+    if (contentType.includes('json') || res.status() >= 400) {
+      const text = await res.text();
+      responsePreview = text.slice(0, 400);
+      try {
+        const json = JSON.parse(text);
+        responseMessage =
+          json?.message ||
+          json?.msg ||
+          json?.error ||
+          json?.data?.message ||
+          '';
+      } catch { /* keep preview only */ }
+    }
+  } catch { /* ignore body read errors */ }
+
+  return {
+    method: request.method(),
+    url,
+    path: (() => {
+      try { return new URL(url).pathname; } catch { return url; }
+    })(),
+    status: res.status(),
+    requestFields,
+    requestBody: rawBody.slice(0, 400),
+    responseMessage: String(responseMessage || '').slice(0, 200),
+    responsePreview,
+  };
+}
+
+function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResults) {
+  const ruleBlocks = extractRuleCheckBlocks(specContent).filter(block => block.id);
+  if (ruleBlocks.length === 0) {
+    return {
+      total: 0,
+      covered: 0,
+      partial: 0,
+      missing: 0,
+      failures: [],
+      warnings: [],
+      rules: [],
+    };
+  }
+
+  const apiCoverage = extractApiCoverageMatrix(specContent);
+  const runtimeCalls = [
+    ...pageResults.flatMap(p => p.apiInteractions || []),
+    ...interactionResults.flatMap(r => (r.interactions || []).flatMap(i => i.apiCalls || [])),
+  ];
+  const uiMessages = [
+    ...pageResults.flatMap(p => [...(p.failures || []), ...(p.warnings || [])]),
+    ...interactionResults.flatMap(r => [...(r.failures || []), ...(r.warnings || [])]),
+  ];
+  const fieldAwareKinds = new Set(['required', 'enum', 'compare_datetime']);
+
+  const rules = ruleBlocks.map((rule) => {
+    const apiRow = apiCoverage.find(api => api.id === rule.apiId);
+    const evidence = [];
+    const missing = [];
+    const warnings = [];
+
+    if (!rule.apiId) {
+      warnings.push('缺少 API 绑定');
+    }
+    if (rule.apiId && !apiRow) {
+      missing.push('绑定 API 未在覆盖矩阵中声明');
+    }
+
+    const observedCalls = apiRow ? runtimeCalls.filter(call =>
+      call.method === apiRow.method &&
+      normalizeApiPath(call.path || '') === normalizeApiPath(apiRow.path)
+    ) : [];
+
+    if (observedCalls.length > 0) {
+      evidence.push(`命中绑定 API ${observedCalls.length} 次`);
+    } else if (apiRow) {
+      warnings.push('smoke 未命中绑定 API');
+    }
+
+    const fieldRefs = [...new Set([rule.left, rule.right].filter(Boolean))];
+    if (fieldAwareKinds.has(rule.kind) && observedCalls.length > 0) {
+      const fieldCovered = observedCalls.some(call =>
+        fieldRefs.every(field =>
+          call.requestFields.includes(field) || (call.requestBody || '').includes(field)
+        )
+      );
+      if (fieldCovered) {
+        evidence.push('运行时请求包含规则字段');
+      } else {
+        missing.push('运行时请求缺少规则字段');
+      }
+    }
+
+    const expectedSuccess = /^(true|false)$/i.test(rule.success) ? rule.success.toLowerCase() === 'true' : null;
+    const errorCalls = observedCalls.filter(call => call.status >= 400);
+    const successCalls = observedCalls.filter(call => call.status >= 200 && call.status < 400);
+
+    if (expectedSuccess === true && observedCalls.length > 0 && successCalls.length === 0 && errorCalls.length > 0) {
+      missing.push('期望成功但运行时全部失败');
+    }
+    if (expectedSuccess === false && observedCalls.length > 0 && errorCalls.length === 0) {
+      warnings.push('运行时未触发异常分支');
+    }
+
+    if (rule.errorMessage) {
+      const messageHit = observedCalls.some(call =>
+        (call.responseMessage || '').includes(rule.errorMessage) ||
+        (call.responsePreview || '').includes(rule.errorMessage)
+      ) || uiMessages.some(msg => msg.includes(rule.errorMessage));
+
+      if (messageHit) {
+        evidence.push('错误文案命中');
+      } else if (errorCalls.length > 0 || expectedSuccess === false) {
+        missing.push('错误文案未命中');
+      } else {
+        warnings.push('未观察到错误文案证据');
+      }
+    }
+
+    let status = 'covered';
+    if (missing.length > 0 && evidence.length === 0) status = 'missing';
+    else if (missing.length > 0 || warnings.length > 0) status = 'partial';
+    else if (evidence.length === 0) status = 'missing';
+
+    return {
+      ...rule,
+      apiRow,
+      observedCalls: observedCalls.length,
+      evidence,
+      missing,
+      warnings,
+      status,
+    };
+  });
+
+  return {
+    total: rules.length,
+    covered: rules.filter(r => r.status === 'covered').length,
+    partial: rules.filter(r => r.status === 'partial').length,
+    missing: rules.filter(r => r.status === 'missing').length,
+    failures: rules.filter(r => r.missing.length > 0).map(r => `${r.id}: ${r.missing.join('、')}`),
+    warnings: rules.flatMap(r => r.warnings.map(item => `${r.id}: ${item}`)),
+    rules,
+  };
+}
+
 // ─── v3.0.0 截图对比 ────────────────────────────────────────
 
 /**
@@ -921,13 +1152,18 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
     if (!url.includes('/api/')) return;
 
     const status = res.status();
+    const snapshot = await buildApiInteractionSnapshot(res);
     const info = {
-      method: res.request().method(),
+      method: snapshot.method,
       url: url.slice(0, 150),
       status,
       contentType: '',
       isJson: true,
       error: null,
+      requestFields: snapshot.requestFields,
+      requestBody: snapshot.requestBody,
+      responseMessage: snapshot.responseMessage,
+      responsePreview: snapshot.responsePreview,
     };
 
     try {
@@ -1125,6 +1361,10 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
       status: a.status,
       isJson: a.isJson,
       error: a.error,
+      requestFields: a.requestFields || [],
+      requestBody: a.requestBody || '',
+      responseMessage: a.responseMessage || '',
+      responsePreview: a.responsePreview || '',
     }));
 
   } catch (err) {
@@ -1193,9 +1433,10 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     if (searchInfo.found) {
       // 收集 API 请求
       const apiCalls = [];
-      const onSearchResponse = (res) => {
+      const onSearchResponse = async (res) => {
         if (res.url().includes('/api/')) {
-          apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+          const snapshot = await buildApiInteractionSnapshot(res);
+          apiCalls.push(snapshot);
         }
       };
       page.on('response', onSearchResponse);
@@ -1215,6 +1456,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
             apiTriggered: apiCalls.length > 0,
             apiCount: apiCalls.length,
             apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+            apiCalls,
           };
           result.interactions.push(interaction);
 
@@ -1273,9 +1515,10 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
 
     if (paginationInfo.found && paginationInfo.hasNextOrPage2) {
       const apiCalls = [];
-      const onPageResponse = (res) => {
+      const onPageResponse = async (res) => {
         if (res.url().includes('/api/')) {
-          apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+          const snapshot = await buildApiInteractionSnapshot(res);
+          apiCalls.push(snapshot);
         }
       };
       page.on('response', onPageResponse);
@@ -1308,6 +1551,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
             apiCount: apiCalls.length,
             apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
             hasPageParam: apiCalls.some(a => /[?&](page|pageNum|current|offset)=/i.test(a.url)),
+            apiCalls,
           };
           result.interactions.push(interaction);
 
@@ -1331,9 +1575,10 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
   try {
     const beforeUrl = page.url();
     const apiCalls = [];
-    const onDetailResponse = (res) => {
+    const onDetailResponse = async (res) => {
       if (res.url().includes('/api/')) {
-        apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+        const snapshot = await buildApiInteractionSnapshot(res);
+        apiCalls.push(snapshot);
       }
     };
     page.on('response', onDetailResponse);
@@ -1387,6 +1632,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
             dialogOpened: detailState.hasDialog,
             apiTriggered: apiCalls.length > 0,
             apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+            apiCalls,
           };
           result.interactions.push(interaction);
 
@@ -1524,13 +1770,10 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
 
     if (formTestInfo.found) {
       const formApiCalls = [];
-      const onFormResponse = (res) => {
+      const onFormResponse = async (res) => {
         if (res.url().includes('/api/')) {
-          formApiCalls.push({
-            method: res.request().method(),
-            url: res.url(),
-            status: res.status(),
-          });
+          const snapshot = await buildApiInteractionSnapshot(res);
+          formApiCalls.push(snapshot);
         }
       };
       page.on('response', onFormResponse);
@@ -1698,6 +1941,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
                   apiTriggered: postPutCalls.length > 0,
                   apiCount: postPutCalls.length,
                   apiErrors: errorCalls.map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+                  apiCalls: postPutCalls,
                 };
                 result.interactions.push(interaction);
 
@@ -2115,13 +2359,19 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         interactionResults,
         apiInteractionSummary
       );
+      const ruleRuntimeSummary = summarizeRuleRuntimeEvidence(
+        specContent,
+        pageResults,
+        interactionResults
+      );
 
       return {
         available: true,
         pass:
           failedPages.length === 0 &&
           failedApis.filter(a => a.status === 0 || a.status >= 500).length === 0 &&
-          acceptanceSummary.failures.length === 0,
+          acceptanceSummary.failures.length === 0 &&
+          ruleRuntimeSummary.failures.length === 0,
         skipReason: null,
         pages: pageResults,
         apiResults,
@@ -2129,6 +2379,7 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         interactionResults,      // v2.8.0
         interactionSummary,      // v2.8.0
         acceptanceSummary,       // v3.3.0
+        ruleRuntimeSummary,
         schemaViolations,        // v3.0.0
         screenshotChanges,       // v3.0.0
         consoleErrors: allConsoleErrors,
