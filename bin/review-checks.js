@@ -155,6 +155,22 @@ function extractRuleCheckBlocks(specContent) {
   return blocks;
 }
 
+function extractApiFieldChecklist(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(API\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      requiredFields: m[2].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      optionalFields: m[3].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      responseFields: m[4].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+      errorFields: m[5].split(',').map(s => s.replace(/[`]/g, '').trim()).filter(Boolean),
+    });
+  }
+  return rows;
+}
+
 function extractFrontApiCalls(projectRoot) {
   const feRoots = ['frontend/src', 'app/src', 'src']
     .map(r => path.join(projectRoot, r))
@@ -656,6 +672,8 @@ function checkRuleCoverage(projectRoot, specContent) {
   if (rules.length === 0) return { pass: true, message: 'spec 中无 Vxx 业务规则矩阵' };
 
   const useGit = isGitRepo(projectRoot);
+  const apiCoverage = extractApiCoverageMatrix(specContent);
+  const apiFieldChecklist = extractApiFieldChecklist(specContent);
   const feRoots = ['frontend/src', 'app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
   const beRoots = ['backend/src', 'src/main'].filter(r => fs.existsSync(path.join(projectRoot, r)));
   const allRoots = [...feRoots, ...beRoots];
@@ -714,6 +732,41 @@ function checkRuleCoverage(projectRoot, specContent) {
       }
       if (dsl.kind === 'required' && !dsl.left) {
         missing.push('RULE-CHECK.required 字段缺失');
+      }
+      if (dsl.kind === 'required') {
+        const fieldFoundInChecklist = apiFieldChecklist.some(api =>
+          api.requiredFields.includes(dsl.left) || api.optionalFields.includes(dsl.left)
+        );
+        if (!fieldFoundInChecklist) {
+          missing.push('RULE-CHECK.required 字段未出现在 API 字段清单');
+        }
+      }
+      if (dsl.kind === 'enum') {
+        const fieldFoundInChecklist = apiFieldChecklist.some(api =>
+          api.requiredFields.includes(dsl.left) || api.optionalFields.includes(dsl.left) || api.responseFields.includes(dsl.left)
+        );
+        if (!fieldFoundInChecklist) {
+          missing.push('RULE-CHECK.enum 字段未出现在 API 字段清单');
+        }
+      }
+      if (dsl.kind === 'compare_datetime') {
+        const fieldsFound = [dsl.left, dsl.right].every(field =>
+          apiFieldChecklist.some(api =>
+            api.requiredFields.includes(field) || api.optionalFields.includes(field) || api.responseFields.includes(field)
+          )
+        );
+        if (!fieldsFound) {
+          missing.push('RULE-CHECK.compare_datetime 字段未在 API 字段清单中闭环');
+        }
+      }
+      if (dsl.errorMessage) {
+        const errorFieldDeclared = apiFieldChecklist.some(api => api.errorFields.length > 0);
+        if (!errorFieldDeclared) {
+          missing.push('RULE-CHECK.error_message 缺少 API 错误字段支撑');
+        }
+      }
+      if (apiCoverage.length === 0) {
+        missing.push('RULE-CHECK 缺少 API 覆盖矩阵支撑');
       }
     }
 

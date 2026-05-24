@@ -174,6 +174,7 @@ The spec template now supports a small `RULE-CHECK` YAML block for `Vxx` rules.
 
 - it is a lightweight execution-oriented template, not a full test framework yet
 - `review` validates whether the block is structurally complete and aligned with the referenced `Vxx`
+- field-based rules now also need to line up with the API field checklist, so the DSL is no longer detached from the contract
 
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 

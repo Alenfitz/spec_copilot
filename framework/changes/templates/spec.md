@@ -62,6 +62,7 @@ RULE-CHECK:
 > 1. `id` 必须对应已有 `Vxx`。
 > 2. `kind` 先使用统一枚举：`required` / `enum` / `compare_datetime` / `state_transition` / `idempotent`。
 > 3. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
+> 4. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到。
 
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |
