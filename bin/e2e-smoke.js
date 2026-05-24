@@ -669,6 +669,7 @@ function summarizeAcceptanceCoverage(scenarios, pageResults, apiResults, interac
   const hasFormSubmitEvidence = allInteractions.some(i => i.type === '表单提交' && i.apiTriggered);
   const hasCreateEvidence = allInteractions.some(i => i.type === '新增按钮' && i.exists);
   const hasDetailEvidence =
+    allInteractions.some(i => i.type === '详情链路' && (i.routeChanged || i.dialogOpened)) ||
     allInteractions.some(i => i.type === '表格操作' && i.actionCount > 0) ||
     lowerRoutes.some(route => /detail|info|view|edit|form|\/1$|\/details?/.test(route));
   const hasListEvidence =
@@ -1326,7 +1327,112 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     result.warnings.push(`分页交互测试异常: ${e.message.slice(0, 100)}`);
   }
 
-  // ── 3. 新增/创建按钮交互（只检测存在性和可点击性，不实际提交） ──
+  // ── 3. 详情/查看链路测试 ──
+  try {
+    const beforeUrl = page.url();
+    const apiCalls = [];
+    const onDetailResponse = (res) => {
+      if (res.url().includes('/api/')) {
+        apiCalls.push({ method: res.request().method(), url: res.url(), status: res.status() });
+      }
+    };
+    page.on('response', onDetailResponse);
+
+    try {
+      const detailInfo = await page.evaluate(() => {
+        const actionTexts = ['查看', '详情', 'View', 'Detail'];
+        const buttons = document.querySelectorAll('button, .el-button, .ant-btn, a');
+        for (const btn of buttons) {
+          const text = (btn.textContent || '').trim();
+          if (actionTexts.some(t => text.includes(t)) && btn.offsetParent !== null && !btn.disabled) {
+            return { found: true, text: text.slice(0, 30) };
+          }
+        }
+        return { found: false };
+      });
+
+      if (detailInfo.found) {
+        const clicked = await page.evaluate((texts) => {
+          const buttons = document.querySelectorAll('button, .el-button, .ant-btn, a');
+          for (const btn of buttons) {
+            const text = (btn.textContent || '').trim();
+            if (texts.some(t => text.includes(t)) && btn.offsetParent !== null && !btn.disabled) {
+              btn.click();
+              return true;
+            }
+          }
+          return false;
+        }, ['查看', '详情', 'View', 'Detail']);
+
+        if (clicked) {
+          await page.waitForTimeout(1800);
+          const afterUrl = page.url();
+          const detailState = await page.evaluate(() => {
+            const visibleDialog = document.querySelector(
+              '.el-dialog:not([style*="display: none"]), .el-drawer:not([style*="display: none"]), ' +
+              '.ant-modal:not([style*="display: none"]), .ant-drawer:not([style*="display: none"]), ' +
+              '[role="dialog"]:not([style*="display: none"])'
+            );
+            const bodyText = (document.body.innerText || '').slice(0, 600);
+            return {
+              hasDialog: !!(visibleDialog && visibleDialog.offsetParent !== null),
+              hasDetailText: /详情|Detail|查看/.test(bodyText),
+            };
+          });
+
+          const interaction = {
+            type: '详情链路',
+            element: detailInfo.text,
+            routeChanged: afterUrl !== beforeUrl,
+            dialogOpened: detailState.hasDialog,
+            apiTriggered: apiCalls.length > 0,
+            apiErrors: apiCalls.filter(a => a.status >= 400).map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
+          };
+          result.interactions.push(interaction);
+
+          if (!interaction.routeChanged && !interaction.dialogOpened) {
+            result.failures.push(`详情/查看操作未打开新页面或弹层（点击 "${detailInfo.text}" 后无可见变化）`);
+          } else if (interaction.apiErrors.length > 0) {
+            result.failures.push(`详情链路触发的 API 报错: ${interaction.apiErrors.slice(0, 2).join('; ')}`);
+          }
+
+          // 尝试回退
+          if (interaction.routeChanged) {
+            try {
+              await page.goBack({ waitUntil: 'networkidle', timeout: timeoutMs });
+              await page.waitForTimeout(800);
+              result.interactions.push({
+                type: '详情回跳',
+                returned: page.url() === beforeUrl,
+              });
+              if (page.url() !== beforeUrl) {
+                result.warnings.push('详情页返回后未回到原列表 URL');
+              }
+            } catch {
+              result.warnings.push('详情页回跳检测失败');
+            }
+          } else if (interaction.dialogOpened) {
+            try {
+              await page.keyboard.press('Escape');
+              await page.waitForTimeout(500);
+              result.interactions.push({
+                type: '详情弹层关闭',
+                closed: true,
+              });
+            } catch {
+              result.warnings.push('详情弹层关闭检测失败');
+            }
+          }
+        }
+      }
+    } finally {
+      page.removeListener('response', onDetailResponse);
+    }
+  } catch (e) {
+    result.warnings.push(`详情链路测试异常: ${e.message.slice(0, 100)}`);
+  }
+
+  // ── 4. 新增/创建按钮交互（只检测存在性和可点击性，不实际提交） ──
   try {
     const createBtnInfo = await page.evaluate(() => {
       const btnTexts = ['新增', '新建', '添加', '创建', 'Add', 'Create', 'New', '+ 新增', '＋新增'];
@@ -1361,7 +1467,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     // 静默
   }
 
-  // ── 4. 表格行操作按钮检测 ──
+  // ── 5. 表格行操作按钮检测 ──
   try {
     const tableActionInfo = await page.evaluate(() => {
       const tables = document.querySelectorAll('.el-table, .ant-table, table');
@@ -1400,7 +1506,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     // 静默
   }
 
-  // ── 5. 表单提交测试（v2.9.0）──
+  // ── 6. 表单提交测试（v2.9.0）──
   // 找到新增/创建按钮 → 点击打开表单 → 填写测试数据 → 提交 → 检查 POST/PUT 请求
   try {
     // 5a. 检测是否有可点击的新增按钮（复用 check 3 的结果）
