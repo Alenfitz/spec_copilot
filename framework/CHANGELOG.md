@@ -40,6 +40,16 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [4.0.4] - 2026-05-24
+
+### 修复（CI Windows）
+
+- **跨平台 test runner**：`npm test` 之前用 `node --test test/*.test.js`，但 Windows shell（cmd / PowerShell）不展开 glob，导致 "no such file" 错误
+- 改为 `node scripts/test.js`，由 JS 脚本枚举 `test/` 下所有 `.test.js` 文件后显式传给 `node --test`
+- 三平台测试（Ubuntu / macOS / Windows）现在都能跑
+
+---
+
 ## [4.0.3] - 2026-05-24
 
 ### 修复（重要 — Windows 兼容性）
