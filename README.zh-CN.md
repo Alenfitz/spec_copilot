@@ -2,7 +2,7 @@
 
 **渐进式 Spec 编码框架** — 一个包，六种 AI 编码工具。让 AI 编码从"黑盒一把梭"变成"白盒分步推进"。
 
-[English](https://github.com/Alenfitz/spec_copilit/blob/main/README.md)
+[English](https://github.com/Alenfitz/spec_copilot/blob/main/README.md)
 
 ---
 
@@ -104,10 +104,10 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 |------|--------|
 | `apply` | Spec 完整性 + 前后端 task 交织度 + 前端 task 粒度 |
 | `smoke` | **构建验证** + **骨架检测** + TS any 泛滥 + **E2E 浏览器冒烟** |
-| `review` | smoke 哨兵 + 功能点覆盖 + 死代码 + stub handler + 嗨语言 |
+| `review` | smoke 哨兵 + 功能点覆盖 + API 契约 + 契约一致性 + 死代码 + 硬编码身份检查 |
 | `archive` | review 哨兵 + spec 审查结论 |
 
-### E2E 浏览器冒烟（v2.3.0）
+### E2E 浏览器冒烟（v2.3.0+）
 
 基于 Playwright 的端到端浏览器验证 — 抓住"能编译但不能用"的问题：
 
@@ -117,6 +117,16 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 - **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
 
 使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
+
+### 契约门禁（v3.2.0）
+
+框架现在会主动拦截一种非常常见的低分问题：**前后端契约漂移**。
+
+- 检查前端请求字段是否覆盖后端必填字段
+- 当 spec 要求 `snake_case` 时，识别不符合风格的请求/响应字段
+- 检测前端是否把当前登录人、操作人、业务身份写死
+
+这会把“页面看起来做完了，但接口其实调不通”从 review 阶段的问题，前置成 gate 阶段的失败。
 
 ### Guard 代码级护栏（v2.6.0）
 

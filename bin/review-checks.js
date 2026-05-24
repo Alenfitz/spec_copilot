@@ -6,9 +6,11 @@
  *
  * 检查维度：
  *   1. API 契约校验：spec 定义的 API → 前端代码是否调用 → 后端代码是否实现
- *   2. 错误处理审计：所有 API 调用点是否有 catch/error 处理
- *   3. 硬编码数据检测：前端组件中是否有该从 API 取的数据被写死
- *   4. 路由完整性：spec 中的页面路由 → router 文件中是否存在
+ *   2. 前后端契约一致性：前端请求字段 / 后端必填字段 / snake_case 约束
+ *   3. 错误处理审计：所有 API 调用点是否有 catch/error 处理
+ *   4. 硬编码数据检测：前端组件中是否有该从 API 取的数据被写死
+ *   5. 硬编码业务身份检测：当前用户/业务身份是否被写死在前端
+ *   6. 路由完整性：spec 中的页面路由 → router 文件中是否存在
  */
 
 const fs = require('fs');
@@ -55,6 +57,10 @@ function readSafe(filePath) {
   try { return fs.readFileSync(filePath, 'utf-8'); } catch { return ''; }
 }
 
+function uniq(arr) {
+  return [...new Set(arr.filter(Boolean))];
+}
+
 // ─── Spec 解析 ──────────────────────────────────────────────
 
 function extractSpecApis(specContent) {
@@ -87,6 +93,113 @@ function extractSpecRoutes(specContent) {
     if (!seen.has(m[1])) { seen.add(m[1]); routes.push(m[1]); }
   }
   return routes;
+}
+
+function extractFrontApiCalls(projectRoot) {
+  const feRoots = ['frontend/src', 'app/src', 'src']
+    .map(r => path.join(projectRoot, r))
+    .filter(fs.existsSync);
+  const results = [];
+
+  for (const root of feRoots) {
+    const files = findFiles(root, ['.ts', '.js']);
+    for (const file of files) {
+      const relPath = path.relative(projectRoot, file);
+      if (!/\/api\//.test(relPath.replace(/\\/g, '/'))) continue;
+      const content = readSafe(file);
+      if (!content) continue;
+
+      const fnRegex = /export function\s+([A-Za-z0-9_$]+)\s*\(([^)]*)\)\s*\{([\s\S]*?)\n\}/g;
+      let m;
+      while ((m = fnRegex.exec(content)) !== null) {
+        const fnName = m[1];
+        const paramsText = m[2] || '';
+        const body = m[3] || '';
+        const endpointMatch = body.match(/\.(get|post|put|delete|patch)\s*<[^>]*>?\s*\(\s*['"`]([^'"`]+)['"`]/i)
+          || body.match(/\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/i);
+        if (!endpointMatch) continue;
+
+        const objectBodyMatch = paramsText.match(/\{([\s\S]*)\}/);
+        let fieldCandidates = [];
+        if (objectBodyMatch) {
+          fieldCandidates = objectBodyMatch[1]
+            .split(',')
+            .map(s => s.trim().replace(/\?.*$/, '').replace(/:.*/, '').trim())
+            .filter(Boolean);
+        } else {
+          fieldCandidates = paramsText.split(',')
+            .map(s => s.trim().replace(/\?.*$/, '').replace(/:.*/, '').trim())
+            .filter(Boolean);
+        }
+
+        results.push({
+          file: relPath,
+          fnName,
+          method: endpointMatch[1].toUpperCase(),
+          path: endpointMatch[2],
+          requestFields: uniq(fieldCandidates),
+          body,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+function extractBackendApiContracts(projectRoot) {
+  const beRoots = ['backend/src/main', 'src/main']
+    .map(r => path.join(projectRoot, r))
+    .filter(fs.existsSync);
+  const results = [];
+
+  for (const root of beRoots) {
+    const controllerFiles = findFiles(root, ['.java']).filter(f => /Controller\.java$/.test(f));
+    for (const file of controllerFiles) {
+      const relPath = path.relative(projectRoot, file);
+      const content = readSafe(file);
+      if (!content) continue;
+
+      const basePathMatch = content.match(/@RequestMapping\(\s*["']([^"']+)["']\s*\)/);
+      const basePath = basePathMatch ? basePathMatch[1] : '';
+      const mappingRegex = /@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\(\s*["']([^"']+)["']\s*\)[\s\S]*?public\s+[^{]+\s+([A-Za-z0-9_$]+)\s*\(\s*([\s\S]*?)\s*\)\s*\{/g;
+      let m;
+      while ((m = mappingRegex.exec(content)) !== null) {
+        const method = m[1].replace('Mapping', '').toUpperCase();
+        const subPath = m[2];
+        const fnName = m[3];
+        const paramsText = m[4] || '';
+        const params = uniq(
+          [...paramsText.matchAll(/(?:@PathVariable|@RequestParam(?:\(\s*["']([^"']+)["'])?|@RequestBody)\s*(?:@Valid\s*)?(?:Map<String,\s*Object>|[A-Za-z0-9_<>, ?]+)\s+([A-Za-z0-9_$]+)/g)]
+            .map(mm => mm[1] || mm[2])
+        );
+
+        const requireCalls = uniq(
+          [...content.slice(m.index, Math.min(content.length, m.index + 1500)).matchAll(/require\(body,\s*["']([^"']+)["']\)/g)]
+            .map(mm => mm[1])
+        );
+
+        results.push({
+          file: relPath,
+          fnName,
+          method,
+          path: `${basePath}${subPath}`.replace(/\/+/g, '/'),
+          requiredFields: requireCalls.length > 0 ? requireCalls : params,
+          rawParams: params,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+function isSnakeCase(name) {
+  return /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(name);
+}
+
+function normalizeApiPath(pathname) {
+  return pathname.replace(/\{[^}]+\}/g, '').replace(/:[a-zA-Z_][\w-]*/g, '').replace(/\/+$/, '');
 }
 
 // ─── Check 1: API 契约校验 ──────────────────────────────────
@@ -157,6 +270,49 @@ function checkApiContract(projectRoot, specContent) {
     feMissing: results.filter(r => r.status === 'fe-missing'),
     beMissing: results.filter(r => r.status === 'be-missing'),
     bothMissing: results.filter(r => r.status === 'both-missing'),
+  };
+}
+
+function checkContractConsistency(projectRoot) {
+  const feApis = extractFrontApiCalls(projectRoot);
+  const beApis = extractBackendApiContracts(projectRoot);
+  const mismatches = [];
+  let checked = 0;
+
+  for (const fe of feApis) {
+    const fePath = normalizeApiPath(fe.path);
+    const be = beApis.find(item =>
+      item.method === fe.method &&
+      normalizeApiPath(item.path) === fePath
+    );
+    if (!be) continue;
+    checked++;
+
+    const feFields = fe.requestFields;
+    const beRequired = be.requiredFields;
+    const missingOnFe = beRequired.filter(field => field && !feFields.includes(field));
+    const nonSnakeFe = feFields.filter(field => field && !isSnakeCase(field));
+    const nonSnakeBe = beRequired.filter(field => field && !isSnakeCase(field));
+
+    if (missingOnFe.length > 0 || nonSnakeFe.length > 0 || nonSnakeBe.length > 0) {
+      mismatches.push({
+        method: fe.method,
+        path: fe.path,
+        frontFile: fe.file,
+        frontFn: fe.fnName,
+        backFile: be.file,
+        backFn: be.fnName,
+        missingOnFe,
+        nonSnakeFe,
+        nonSnakeBe,
+      });
+    }
+  }
+
+  return {
+    pass: mismatches.length === 0,
+    checked,
+    mismatches,
   };
 }
 
@@ -315,6 +471,51 @@ function checkHardcodedData(projectRoot) {
   };
 }
 
+function checkHardcodedIdentities(projectRoot) {
+  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
+    fs.existsSync(path.join(projectRoot, r))
+  );
+  const violations = [];
+  const identityPatterns = [
+    { regex: /\buser-\d{3,}\b/g, reason: '硬编码用户 ID' },
+    { regex: /['"`](张三|李四|王五|赵六|管理员|许可人|签发人|接票人)['"`]/g, reason: '硬编码业务身份/人员名称' },
+    { regex: /\b(currentUser|operatorId|operatorName)\s*[:=]\s*['"`][^'"`]+['"`]/g, reason: '当前登录人被前端写死' },
+  ];
+
+  for (const root of feRoots) {
+    const files = findFiles(path.join(projectRoot, root), ['.vue', '.tsx', '.jsx', '.ts', '.js']);
+    for (const file of files) {
+      const relPath = path.relative(projectRoot, file);
+      if (/\/(mock|__tests__|fixtures)\//.test(relPath.replace(/\\/g, '/'))) continue;
+      const content = readSafe(file);
+      if (!content) continue;
+      const lines = content.split('\n');
+
+      lines.forEach((line, idx) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//') || trimmed.startsWith('*')) return;
+        for (const pattern of identityPatterns) {
+          if (pattern.regex.test(line)) {
+            violations.push({
+              file: relPath,
+              line: idx + 1,
+              detail: pattern.reason,
+              snippet: trimmed.slice(0, 120),
+            });
+            break;
+          }
+          pattern.regex.lastIndex = 0;
+        }
+      });
+    }
+  }
+
+  return {
+    pass: violations.length === 0,
+    violations,
+  };
+}
+
 // ─── Check 4: 路由完整性 ────────────────────────────────────
 
 /**
@@ -380,7 +581,19 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: 'API 契约校验', pass: true, error: e.message });
   }
 
-  // 2. 错误处理审计
+  // 2. 前后端契约一致性
+  try {
+    const contractConsistency = checkContractConsistency(projectRoot);
+    checks.push({
+      name: '前后端契约一致性',
+      ...contractConsistency,
+    });
+    if (!contractConsistency.pass) overallPass = false;
+  } catch (e) {
+    checks.push({ name: '前后端契约一致性', pass: true, error: e.message });
+  }
+
+  // 3. 错误处理审计
   try {
     const errorHandling = checkErrorHandling(projectRoot);
     checks.push({
@@ -397,7 +610,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '错误处理审计', pass: true, error: e.message });
   }
 
-  // 3. 硬编码数据检测
+  // 4. 硬编码数据检测
   try {
     const hardcoded = checkHardcodedData(projectRoot);
     checks.push({
@@ -409,7 +622,19 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '硬编码数据检测', pass: true, error: e.message });
   }
 
-  // 4. 路由完整性
+  // 5. 硬编码业务身份检测
+  try {
+    const identities = checkHardcodedIdentities(projectRoot);
+    checks.push({
+      name: '硬编码业务身份检测',
+      ...identities,
+    });
+    if (!identities.pass) overallPass = false;
+  } catch (e) {
+    checks.push({ name: '硬编码业务身份检测', pass: true, error: e.message });
+  }
+
+  // 6. 路由完整性
   try {
     const routes = checkRouteCompleteness(projectRoot, specContent);
     checks.push({
@@ -427,7 +652,9 @@ function runReviewChecks(projectRoot, specContent) {
 module.exports = {
   runReviewChecks,
   checkApiContract,
+  checkContractConsistency,
   checkErrorHandling,
   checkHardcodedData,
+  checkHardcodedIdentities,
   checkRouteCompleteness,
 };

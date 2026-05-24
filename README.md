@@ -2,7 +2,7 @@
 
 **Spec-Driven Development Framework** — One package, six AI coding tools. Turn AI coding from "black-box YOLO" into "white-box step-by-step."
 
-[中文文档](https://github.com/Alenfitz/spec_copilit/blob/main/README.zh-CN.md)
+[中文文档](https://github.com/Alenfitz/spec_copilot/blob/main/README.zh-CN.md)
 
 ---
 
@@ -103,10 +103,10 @@ npx @alenfitz/spec-copilot gate <name> smoke
 |------|--------|
 | `apply` | Spec completeness + task interleaving + frontend task granularity |
 | `smoke` | **Build verification** + **skeleton detection** + TS any abuse + **E2E browser smoke** |
-| `review` | Smoke sentinel + feature coverage + dead code + stub handlers + hype language |
+| `review` | Smoke sentinel + feature coverage + API contract + contract consistency + dead code + hardcoded identity checks |
 | `archive` | Review sentinel + spec audit conclusion |
 
-### E2E Browser Smoke (v2.3.0)
+### E2E Browser Smoke (v2.3.0+)
 
 Playwright-based end-to-end verification — catches "compiles but doesn't work" issues:
 
@@ -116,6 +116,16 @@ Playwright-based end-to-end verification — catches "compiles but doesn't work"
 - **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
 
 Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
+
+### Contract Gate (v3.2.0)
+
+The framework now blocks a frequent low-score failure mode: **frontend/backend contract drift**.
+
+- Checks whether frontend request fields match backend required fields
+- Flags non-`snake_case` request/response field names when your spec requires `snake_case`
+- Detects hardcoded current-user / operator identity in frontend code
+
+This turns “the UI looks complete but the API cannot actually be called” into a gate failure instead of a review surprise.
 
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 

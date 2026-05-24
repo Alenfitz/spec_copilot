@@ -28,6 +28,10 @@ const {
   checkTaskGranularity,
   checkFrontendEvidence,
 } = require('./frontend-checks');
+const {
+  checkContractConsistency,
+  checkHardcodedIdentities,
+} = require('./review-checks');
 
 // ─── 常量 ───────────────────────────────────────────────────
 
@@ -613,6 +617,41 @@ async function cmdGate(args) {
         }
       } catch (e) {
         log.warn(`any 泛滥检测跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // 3.5 前后端契约一致性（强阻断）
+      try {
+        const contractResult = checkContractConsistency(projectRoot);
+        if (!contractResult.pass) {
+          const details = contractResult.mismatches.map(item => {
+            const issues = [];
+            if (item.missingOnFe.length > 0) issues.push(`前端缺少必填字段 [${item.missingOnFe.join(', ')}]`);
+            if (item.nonSnakeFe.length > 0) issues.push(`前端非 snake_case [${item.nonSnakeFe.join(', ')}]`);
+            if (item.nonSnakeBe.length > 0) issues.push(`后端非 snake_case [${item.nonSnakeBe.join(', ')}]`);
+            return `${item.method} ${item.path} :: ${item.frontFile}#${item.frontFn} ↔ ${item.backFile}#${item.backFn} — ${issues.join(' / ')}`;
+          }).join('\n   ');
+          fail(`前后端契约一致性检查失败（${contractResult.mismatches.length}/${contractResult.checked} 个 API 不一致）：\n   ${details}`);
+        } else if (contractResult.checked > 0) {
+          log.ok(`前后端契约一致性：${contractResult.checked} 个 API 检查通过`);
+        }
+      } catch (e) {
+        log.warn(`前后端契约一致性检查跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // 3.6 硬编码业务身份检测（强阻断）
+      try {
+        const identityResult = checkHardcodedIdentities(projectRoot);
+        if (!identityResult.pass) {
+          const details = identityResult.violations
+            .slice(0, 15)
+            .map(v => `${v.file}:${v.line} ${v.detail} — ${v.snippet}`)
+            .join('\n   ');
+          fail(`硬编码业务身份检测命中（${identityResult.violations.length} 项）：\n   ${details}\n   ⚠️ 当前登录人/业务身份必须由调用方或状态管理提供，不能在页面中写死`);
+        } else {
+          log.ok('硬编码业务身份检测：clean');
+        }
+      } catch (e) {
+        log.warn(`硬编码业务身份检测跳过：${e.message.split('\n')[0]}`);
       }
 
       // 4. E2E 浏览器冒烟（可选，需目标项目安装 Playwright）
@@ -1344,6 +1383,21 @@ async function cmdGate(args) {
             }
           }
 
+          if (check.name === '前后端契约一致性') {
+            if (check.pass) {
+              log.ok(`前后端契约一致性：${check.checked} 个 API 检查通过`);
+            } else {
+              const msgs = check.mismatches.map(item => {
+                const parts = [];
+                if (item.missingOnFe.length > 0) parts.push(`前端缺少 [${item.missingOnFe.join(', ')}]`);
+                if (item.nonSnakeFe.length > 0) parts.push(`前端非 snake_case [${item.nonSnakeFe.join(', ')}]`);
+                if (item.nonSnakeBe.length > 0) parts.push(`后端非 snake_case [${item.nonSnakeBe.join(', ')}]`);
+                return `${item.method} ${item.path}: ${parts.join(' / ')}`;
+              });
+              fail(`前后端契约一致性失败：\n   ${msgs.join('\n   ')}`);
+            }
+          }
+
           if (check.name === '错误处理审计') {
             if (check.totalApiCalls === 0) {
               log.info('错误处理审计：未检测到前端 API 调用');
@@ -1362,6 +1416,15 @@ async function cmdGate(args) {
           if (check.name === '硬编码数据检测') {
             if (check.suspects && check.suspects.length > 0) {
               log.warn(`硬编码数据警告（${check.suspects.length} 处疑似 mock 数据）：\n   ${check.suspects.slice(0, 5).map(s => `${s.file}:${s.line} — ${s.detail}`).join('\n   ')}`);
+            }
+          }
+
+          if (check.name === '硬编码业务身份检测') {
+            if (!check.pass) {
+              const msgs = check.violations.slice(0, 10).map(v => `${v.file}:${v.line} ${v.detail}`);
+              fail(`硬编码业务身份检测失败（${check.violations.length} 处）：\n   ${msgs.join('\n   ')}`);
+            } else {
+              log.ok('硬编码业务身份检测：clean');
             }
           }
 
@@ -1496,10 +1559,12 @@ async function cmdGate(args) {
           { name: 'smoke 哨兵', weight: 8, failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
           { name: '功能点覆盖', weight: 20, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
           { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/] },
-          { name: '错误处理', weight: 12, failPatterns: [/错误处理缺失/, /无.*catch/] },
-          { name: '死代码', weight: 12, failPatterns: [/死代码/, /从未被.*import/] },
+          { name: '契约一致性', weight: 12, failPatterns: [/契约一致性/, /缺少必填字段/, /snake_case/] },
+          { name: '错误处理', weight: 10, failPatterns: [/错误处理缺失/, /无.*catch/] },
+          { name: '死代码', weight: 10, failPatterns: [/死代码/, /从未被.*import/] },
           { name: '路由完整', weight: 8, failPatterns: [/路由缺失/] },
           { name: '前端检查', weight: 10, failPatterns: [/stub.*handler/, /dialog.*未挂载/, /API.*覆盖/] },
+          { name: '身份来源', weight: 10, failPatterns: [/硬编码业务身份/, /当前登录人.*写死/, /硬编码用户 ID/] },
           { name: '校准差', weight: 10, failPatterns: [/校准差超标/, /自我评估.*失准/] },
         ];
       }
