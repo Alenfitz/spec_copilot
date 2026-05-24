@@ -161,6 +161,13 @@ This turns “the UI looks complete but the API cannot actually be called” int
 - trigger points and error/result evidence must be searchable
 - `verification` can no longer be a vague placeholder like "handled in code"
 
+### Precision Mapping
+
+`review` now prefers explicit spec matrices before falling back to fuzzy grep:
+
+- API coverage checks use `前端调用方` and `后端实现入口` from the spec matrix when available
+- this reduces false positives on frontend/backend matching
+
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:

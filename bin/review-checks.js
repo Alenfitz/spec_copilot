@@ -112,6 +112,24 @@ function extractRuleMatrix(specContent) {
   return rows;
 }
 
+function extractApiCoverageMatrix(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(API\d+)\s*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      method: m[2].trim().toUpperCase(),
+      path: m[3].trim(),
+      frontendCaller: m[4].trim().replace(/[`]/g, ''),
+      backendEntry: m[5].trim().replace(/[`]/g, ''),
+      requestStyle: m[6].trim(),
+      responseStyle: m[7].trim(),
+    });
+  }
+  return rows;
+}
+
 function extractFrontApiCalls(projectRoot) {
   const feRoots = ['frontend/src', 'app/src', 'src']
     .map(r => path.join(projectRoot, r))
@@ -226,6 +244,7 @@ function normalizeApiPath(pathname) {
  */
 function checkApiContract(projectRoot, specContent) {
   const apis = extractSpecApis(specContent);
+  const coverageRows = extractApiCoverageMatrix(specContent);
   if (apis.length === 0) return { pass: true, results: [], message: 'spec 中无 API 端点声明' };
 
   const useGit = isGitRepo(projectRoot);
@@ -239,12 +258,43 @@ function checkApiContract(projectRoot, specContent) {
   const results = [];
 
   for (const api of apis) {
+    const mapped = coverageRows.find(row =>
+      row.method === api.method && normalizeApiPath(row.path) === normalizeApiPath(api.path)
+    );
     // 简化路径用于搜索（去掉路径参数和结尾斜杠）
     const searchPath = api.path.replace(/\{[^}]+\}/g, '').replace(/\/+$/, '');
     const shortPath = searchPath.split('/').slice(0, 4).join('/'); // /api/users/xxx → /api/users
 
     let feFound = false;
     let beFound = false;
+    let feExact = false;
+    let beExact = false;
+
+    if (mapped) {
+      if (mapped.frontendCaller) {
+        const [frontFile, frontFn] = mapped.frontendCaller.split('#');
+        if (frontFile && frontFn) {
+          const frontAbs = path.join(projectRoot, frontFile);
+          const content = readSafe(frontAbs);
+          feExact = !!content && new RegExp(`export\\s+function\\s+${frontFn}\\s*\\(`).test(content);
+        }
+      }
+      if (mapped.backendEntry) {
+        const [backClass, backFn] = mapped.backendEntry.split('#');
+        const beRootsAbs = ['backend/src/main', 'src/main'].map(r => path.join(projectRoot, r)).filter(fs.existsSync);
+        for (const root of beRootsAbs) {
+          const files = findFiles(root, ['.java', '.kt', '.py', '.go']);
+          const hit = files.find(file => {
+            const content = readSafe(file);
+            return content.includes(backClass || '') && content.includes(backFn || '');
+          });
+          if (hit) {
+            beExact = true;
+            break;
+          }
+        }
+      }
+    }
 
     if (useGit) {
       const matches = gitGrep(projectRoot, shortPath);
@@ -272,9 +322,11 @@ function checkApiContract(projectRoot, specContent) {
     results.push({
       method: api.method,
       path: api.path,
-      feFound,
-      beFound,
-      status: feFound && beFound ? 'ok' : feFound ? 'be-missing' : beFound ? 'fe-missing' : 'both-missing',
+      feFound: feExact || feFound,
+      beFound: beExact || beFound,
+      feExact,
+      beExact,
+      status: (feExact || feFound) && (beExact || beFound) ? 'ok' : (feExact || feFound) ? 'be-missing' : (beExact || beFound) ? 'fe-missing' : 'both-missing',
     });
   }
 
