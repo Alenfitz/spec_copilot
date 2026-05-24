@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { detectFrontendRoots, detectBackendRoots } = require('./project-roots');
 
 // ─── 工具函数 ────────────────────────────────────────────────
 
@@ -182,9 +183,7 @@ function extractApiFieldChecklist(specContent) {
 }
 
 function extractFrontApiCalls(projectRoot) {
-  const feRoots = ['frontend/src', 'app/src', 'src']
-    .map(r => path.join(projectRoot, r))
-    .filter(fs.existsSync);
+  const feRoots = detectFrontendRoots(projectRoot);
   const results = [];
 
   for (const root of feRoots) {
@@ -234,9 +233,7 @@ function extractFrontApiCalls(projectRoot) {
 }
 
 function extractBackendApiContracts(projectRoot) {
-  const beRoots = ['backend/src/main', 'src/main']
-    .map(r => path.join(projectRoot, r))
-    .filter(fs.existsSync);
+  const beRoots = detectBackendRoots(projectRoot);
   const results = [];
 
   for (const root of beRoots) {
@@ -357,12 +354,8 @@ function checkApiContract(projectRoot, specContent) {
   if (apis.length === 0) return { pass: true, results: [], message: 'spec 中无 API 端点声明' };
 
   const useGit = isGitRepo(projectRoot);
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
-  const beRoots = ['backend/src', 'src/main'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  const feRoots = detectFrontendRoots(projectRoot);
+  const beRoots = detectBackendRoots(projectRoot);
 
   const results = [];
 
@@ -383,15 +376,24 @@ function checkApiContract(projectRoot, specContent) {
       if (mapped.frontendCaller) {
         const [frontFile, frontFn] = mapped.frontendCaller.split('#');
         if (frontFile && frontFn) {
-          const frontAbs = path.join(projectRoot, frontFile);
-          const content = readSafe(frontAbs);
-          feExact = !!content && new RegExp(`export\\s+function\\s+${frontFn}\\s*\\(`).test(content);
+          // 尝试在项目根 + 所有 fe roots 下查找
+          const candidates = [
+            path.join(projectRoot, frontFile),
+            ...feRoots.map(r => path.join(path.dirname(r), frontFile)), // fe-root 的父目录（hf-web/）+ frontFile
+            ...feRoots.map(r => path.join(r, frontFile)),                // fe-root 本身 + frontFile
+          ];
+          for (const cand of candidates) {
+            const content = readSafe(cand);
+            if (content && new RegExp(`export\\s+function\\s+${frontFn}\\s*\\(`).test(content)) {
+              feExact = true;
+              break;
+            }
+          }
         }
       }
       if (mapped.backendEntry) {
         const [backClass, backFn] = mapped.backendEntry.split('#');
-        const beRootsAbs = ['backend/src/main', 'src/main'].map(r => path.join(projectRoot, r)).filter(fs.existsSync);
-        for (const root of beRootsAbs) {
+        for (const root of beRoots) {
           const files = findFiles(root, ['.java', '.kt', '.py', '.go']);
           const hit = files.find(file => {
             const content = readSafe(file);
@@ -417,12 +419,12 @@ function checkApiContract(projectRoot, specContent) {
     } else {
       // 无 git，全文搜索（性能差但兼容）
       for (const root of feRoots) {
-        const files = findFiles(path.join(projectRoot, root), ['.vue', '.tsx', '.jsx', '.ts', '.js']);
+        const files = findFiles(root, ['.vue', '.tsx', '.jsx', '.ts', '.js']);
         feFound = files.some(f => readSafe(f).includes(shortPath));
         if (feFound) break;
       }
       for (const root of beRoots) {
-        const files = findFiles(path.join(projectRoot, root), ['.java', '.kt', '.py', '.go']);
+        const files = findFiles(root, ['.java', '.kt', '.py', '.go']);
         beFound = files.some(f => readSafe(f).includes(shortPath));
         if (beFound) break;
       }
@@ -500,15 +502,13 @@ function checkContractConsistency(projectRoot) {
  * 检查前端 API 调用点是否有错误处理
  */
 function checkErrorHandling(projectRoot) {
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  const feRoots = detectFrontendRoots(projectRoot);
 
   const violations = [];
   let totalApiCalls = 0;
 
   for (const root of feRoots) {
-    const files = findFiles(path.join(projectRoot, root), ['.vue', '.tsx', '.jsx', '.ts', '.js']);
+    const files = findFiles(root, ['.vue', '.tsx', '.jsx', '.ts', '.js']);
 
     for (const file of files) {
       const content = readSafe(file);
@@ -583,14 +583,12 @@ function checkErrorHandling(projectRoot) {
  * 检测前端组件中可能是硬编码 mock 数据的模式
  */
 function checkHardcodedData(projectRoot) {
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  const feRoots = detectFrontendRoots(projectRoot);
 
   const suspects = [];
 
   for (const root of feRoots) {
-    const files = findFiles(path.join(projectRoot, root), ['.vue', '.tsx', '.jsx', '.ts', '.js']);
+    const files = findFiles(root, ['.vue', '.tsx', '.jsx', '.ts', '.js']);
 
     for (const file of files) {
       const content = readSafe(file);
@@ -650,9 +648,7 @@ function checkHardcodedData(projectRoot) {
 }
 
 function checkHardcodedIdentities(projectRoot) {
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  const feRoots = detectFrontendRoots(projectRoot);
   const violations = [];
   const identityPatterns = [
     { regex: /\buser-\d{3,}\b/g, reason: '硬编码用户 ID' },
@@ -661,7 +657,7 @@ function checkHardcodedIdentities(projectRoot) {
   ];
 
   for (const root of feRoots) {
-    const files = findFiles(path.join(projectRoot, root), ['.vue', '.tsx', '.jsx', '.ts', '.js']);
+    const files = findFiles(root, ['.vue', '.tsx', '.jsx', '.ts', '.js']);
     for (const file of files) {
       const relPath = path.relative(projectRoot, file);
       if (/\/(mock|__tests__|fixtures)\//.test(relPath.replace(/\\/g, '/'))) continue;
@@ -704,14 +700,12 @@ function checkRouteCompleteness(projectRoot, specContent) {
   if (specRoutes.length === 0) return { pass: true, message: 'spec 中无显式路由声明' };
 
   // 读取 router 文件
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  const feRoots = detectFrontendRoots(projectRoot);
 
   let routerContent = '';
   for (const root of feRoots) {
-    for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js']) {
-      const p = path.join(projectRoot, root, name);
+    for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js', 'routes/index.ts', 'routes.ts']) {
+      const p = path.join(root, name);
       if (fs.existsSync(p)) routerContent += readSafe(p) + '\n';
     }
   }
@@ -744,8 +738,8 @@ function checkRuleCoverage(projectRoot, specContent) {
   const apiFieldChecklist = extractApiFieldChecklist(specContent);
   const frontApiCalls = extractFrontApiCalls(projectRoot);
   const backendApis = extractBackendApiContracts(projectRoot);
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
-  const beRoots = ['backend/src', 'src/main'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+  const feRoots = detectFrontendRoots(projectRoot);
+  const beRoots = detectBackendRoots(projectRoot);
   const allRoots = [...feRoots, ...beRoots];
 
   const findMatches = (pattern) => {
@@ -754,8 +748,7 @@ function checkRuleCoverage(projectRoot, specContent) {
     }
     const matches = [];
     for (const root of allRoots) {
-      const abs = path.join(projectRoot, root);
-      const files = findFiles(abs, ['.vue', '.tsx', '.jsx', '.ts', '.js', '.java', '.kt', '.py', '.go']);
+      const files = findFiles(root, ['.vue', '.tsx', '.jsx', '.ts', '.js', '.java', '.kt', '.py', '.go']);
       for (const file of files) {
         const content = readSafe(file);
         if (content.includes(pattern)) {

@@ -1015,7 +1015,8 @@ async function cmdGate(args) {
       // 扫描 src/views 和 src/components 下的 .vue / .tsx / .jsx 文件，
       // 用 git grep 检查是否在任何其它文件里被 import 或在路由中引用
       try {
-        const feRoots = ['app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+        const { detectFrontendRoots: _detectFeRoots } = require('./project-roots');
+        const feRoots = _detectFeRoots(projectRoot);
         if (feRoots.length > 0) {
           const candidates = [];
           for (const root of feRoots) {
@@ -1033,7 +1034,7 @@ async function cmdGate(args) {
                 }
               }
             };
-            walk(path.join(projectRoot, root));
+            walk(root);
           }
 
           const deadFiles = [];
@@ -1072,7 +1073,8 @@ async function cmdGate(args) {
       //   3. dialog 挂载（XxxDialog.vue 必须在某父组件里实例化）
       //   4. API 覆盖（spec §6 声明的 API 路径必须在前端 src/api/ 中出现）
       try {
-        const feRoots = ['app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+        const { detectFrontendRoots: _detectFeRoots2 } = require('./project-roots');
+        const feRoots = _detectFeRoots2(projectRoot);
         if (feRoots.length > 0) {
           const feFailures = [];
 
@@ -1090,7 +1092,7 @@ async function cmdGate(args) {
                 }
               }
             };
-            walk(path.join(projectRoot, root));
+            walk(root);
 
             for (const file of vueFiles) {
               const content = fs.readFileSync(file, 'utf-8');
@@ -1124,8 +1126,8 @@ async function cmdGate(args) {
           // 4.2 路由覆盖检测
           const routerCandidates = [];
           for (const root of feRoots) {
-            for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js']) {
-              const p = path.join(projectRoot, root, name);
+            for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js', 'routes/index.ts', 'routes.ts']) {
+              const p = path.join(root, name);
               if (fs.existsSync(p)) routerCandidates.push(p);
             }
           }
@@ -1133,7 +1135,7 @@ async function cmdGate(args) {
             const routerContent = routerCandidates.map(p => fs.readFileSync(p, 'utf-8')).join('\n');
             // 找 src/views 下的所有 .vue 文件，看其 basename（去 .vue）是否在 router 内被引用
             for (const root of feRoots) {
-              const viewsDir = path.join(projectRoot, root, 'views');
+              const viewsDir = path.join(root, 'views');
               if (!fs.existsSync(viewsDir)) continue;
               const collectViews = (dir, acc = []) => {
                 for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -1145,7 +1147,7 @@ async function cmdGate(args) {
               };
               const views = collectViews(viewsDir);
               for (const v of views) {
-                const rel = path.relative(path.join(projectRoot, root), v).replace(/\\/g, '/');
+                const rel = path.relative(root, v).replace(/\\/g, '/');
                 const baseName = path.basename(v).replace(/\.(vue|tsx|jsx)$/, '');
                 // 在 router 里搜该文件路径片段（去掉 views/）或同名 import
                 const stripped = rel.replace(/^views\//, '').replace(/\.(vue|tsx|jsx)$/, '');
@@ -1173,8 +1175,8 @@ async function cmdGate(args) {
           // 4.3 Dialog 挂载检测
           for (const root of feRoots) {
             const componentsDirs = [
-              path.join(projectRoot, root, 'components'),
-              path.join(projectRoot, root, 'components', 'business'),
+              path.join(root, 'components'),
+              path.join(root, 'components', 'business'),
             ].filter(d => fs.existsSync(d));
             for (const cdir of componentsDirs) {
               const dialogs = fs.readdirSync(cdir).filter(f => /Dialog\.(vue|tsx|jsx)$/.test(f));
@@ -1201,9 +1203,10 @@ async function cmdGate(args) {
           const apiPaths = [...new Set((specContent.match(/\/api\/[a-zA-Z][\w\-\/{}]*/g) || []))];
           if (apiPaths.length > 0) {
             for (const root of feRoots) {
-              const apiDir = path.join(projectRoot, root, 'api');
+              const apiDir = path.join(root, 'api');
+              const relRoot = path.relative(projectRoot, root);
               if (!fs.existsSync(apiDir)) {
-                feFailures.push(`${root}/api/ 目录不存在 — spec 声明 ${apiPaths.length} 个 API 路径但前端无 API 层`);
+                feFailures.push(`${relRoot}/api/ 目录不存在 — spec 声明 ${apiPaths.length} 个 API 路径但前端无 API 层`);
                 continue;
               }
               const apiContent = fs.readdirSync(apiDir)
@@ -1219,7 +1222,7 @@ async function cmdGate(args) {
                 }
               }
               if (missingApis.length > 0) {
-                feFailures.push(`${root}/api/ 缺失 ${missingApis.length} 个 API 调用：${missingApis.slice(0, 8).join(', ')}${missingApis.length > 8 ? ' ...' : ''}`);
+                feFailures.push(`${relRoot}/api/ 缺失 ${missingApis.length} 个 API 调用：${missingApis.slice(0, 8).join(', ')}${missingApis.length > 8 ? ' ...' : ''}`);
               }
             }
           }

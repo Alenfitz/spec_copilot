@@ -40,6 +40,42 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [4.0.5] - 2026-05-24
+
+### 重要修复 — 自动识别项目目录命名
+
+**问题**：之前所有 review/smoke 检查都硬编码了 `frontend/src`、`backend/src/main`、`src/` 等"标准"路径。用户使用自定义命名（如 `hf-web/`、`hf-server/`、`my-app/`、`web-client/`）时，所有代码扫描静默跳过，导致：
+- 错误处理审计：0 个文件扫描（实际有 12 处缺 catch）
+- 硬编码身份检测：0 个文件扫描（实际有硬编码业务身份）
+- 骨架组件检测：0 个文件扫描
+- API 契约校验：找不到代码
+
+最终结果：gate 给出虚高分数（69/100），但实际代码问题完全没被发现。
+
+**修复**：
+- 新增 `bin/project-roots.js` 共享模块，按项目内容特征（含前端依赖的 package.json / pom.xml / build.gradle / go.mod 等）自动识别前后端根目录
+- `review-checks.js`、`frontend-checks.js`、`e2e-smoke.js`、`cli.js` 全部改用共享检测，移除所有硬编码路径
+- 支持的命名模式：任何含有 vue/react/angular/next/svelte 等依赖的目录都识别为前端；含 pom.xml/go.mod 等的识别为后端
+
+**实测效果**（基于 947 行工作票需求 + hf-web + hf-server 项目）：
+- 错误处理审计：扫描到 12 处缺 catch（之前 0）
+- 硬编码身份检测：扫描到 1 处硬编码业务身份（之前 0）
+- 骨架组件检测：扫描 3 个组件（之前 0）
+- 整体评分：69 → 40（更真实地反映代码质量）
+
+### 测试
+
+- 新增 `test/project-roots.test.js`，14 个测试覆盖：
+  - 标准命名（`src/`、`frontend/src`）
+  - 自定义命名（`hf-web/`、`hf-server/`、`my-app/`）
+  - Next.js 无 src 目录
+  - Express / Go / Python 后端
+  - 排除 `node_modules` / `dist` / `spec_copilot` 等
+  - Vue 项目不被误判为后端
+- 总测试数：46 → 60
+
+---
+
 ## [4.0.4] - 2026-05-24
 
 ### 修复（CI Windows）

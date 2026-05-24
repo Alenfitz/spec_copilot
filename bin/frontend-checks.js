@@ -27,10 +27,9 @@ function walkFiles(dir, filter, result = []) {
 }
 
 function findFeRoots(projectRoot) {
-  return ['frontend/src', 'app/src', 'src'].filter(r => {
-    const full = path.join(projectRoot, r);
-    return fs.existsSync(full) && fs.statSync(full).isDirectory();
-  });
+  // v4.0.5+: 委托给共享检测模块（自动识别 hf-web / my-app / web-client 等自定义命名）
+  const { detectFrontendRoots } = require('./project-roots');
+  return detectFrontendRoots(projectRoot);
 }
 
 function extractVueTemplate(content) {
@@ -60,7 +59,7 @@ function detectSkeletonComponents(projectRoot) {
   let total = 0;
 
   for (const root of feRoots) {
-    const vueFiles = walkFiles(path.join(projectRoot, root), f => /\.vue$/.test(f));
+    const vueFiles = walkFiles(root, f => /\.vue$/.test(f));
 
     for (const file of vueFiles) {
       const baseName = path.basename(file);
@@ -186,7 +185,7 @@ function detectAnyAbuse(projectRoot, threshold = 5) {
   let totalAnys = 0;
 
   for (const root of feRoots) {
-    const tsFiles = walkFiles(path.join(projectRoot, root), f => /\.(ts|tsx|vue)$/.test(f));
+    const tsFiles = walkFiles(root, f => /\.(ts|tsx|vue)$/.test(f));
 
     for (const file of tsFiles) {
       const content = fs.readFileSync(file, 'utf-8');

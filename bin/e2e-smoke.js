@@ -885,15 +885,15 @@ function extractSpecRoutes(specContent) {
  * 从前端 router 文件中提取实际路由，补全 spec 中未显式声明路由的功能点
  */
 function resolveRoutesFromProject(projectRoot, specRoutes) {
-  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r =>
-    fs.existsSync(path.join(projectRoot, r))
-  );
+  // v4.0.5+: 用共享检测识别自定义命名（hf-web / my-app 等）
+  const { detectFrontendRoots } = require('./project-roots');
+  const feRoots = detectFrontendRoots(projectRoot);
 
   // 查找 router 文件
   let routerContent = '';
   for (const root of feRoots) {
-    for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js']) {
-      const p = path.join(projectRoot, root, name);
+    for (const name of ['router/index.ts', 'router/index.js', 'router.ts', 'router.js', 'routes/index.ts', 'routes.ts']) {
+      const p = path.join(root, name);
       if (fs.existsSync(p)) {
         routerContent += fs.readFileSync(p, 'utf-8') + '\n';
       }
