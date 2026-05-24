@@ -40,6 +40,13 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [4.0.2] - 2026-05-24
+
+### 测试
+- **review-checks 测试覆盖**：新增 `test/review-checks.test.js`，9 个测试覆盖 `runReviewChecks`、`checkApiContract`、`checkHardcodedIdentities`、`checkHardcodedData`、`checkErrorHandling`、`checkRouteCompleteness` 等入口函数。总测试数 37 → 46
+
+---
+
 ## [4.0.1] - 2026-05-24
 
 ### 文档
