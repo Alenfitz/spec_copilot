@@ -102,6 +102,7 @@ function buildCommandRoutingSection() {
 | \`/spec:init\` | \`spec_copilot/commands/spec:init.md\` |
 | \`/spec:bootstrap\` | \`spec_copilot/commands/spec:bootstrap.md\` |
 | \`/spec:propose <需求>\` | \`spec_copilot/commands/spec:propose.md\` |
+| \`/spec:lite <需求>\` | \`spec_copilot/commands/spec:lite.md\` |
 | \`/spec:flow <需求>\` | \`spec_copilot/commands/spec:flow.md\` |
 | \`/spec:apply <变更名>\` | \`spec_copilot/commands/spec:apply.md\` |
 | \`/spec:smoke <变更名>\` | \`spec_copilot/commands/spec:smoke.md\` |

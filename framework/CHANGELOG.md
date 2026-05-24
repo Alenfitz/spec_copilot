@@ -40,6 +40,63 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [4.0.0] - 2026-05-24 ⚡ BREAKING CHANGE
+
+### 战略调整 — 减法版本
+
+v3 系列在两天内迭代 13 个版本（v3.2 → v3.13），每个版本只加一个小检查，**功能债已经远大于功能收益**。v4.0 是一次正式的"减法"，目的是恢复可用性。
+
+### 删除（不兼容变更）
+
+- **删除 RULE-CHECK DSL**：v3.7-3.13 的 YAML 规则模板，门槛过高且实际不被使用
+- **简化 spec.md 模板**（247 行 → 91 行）：
+  - 5 个矩阵 → 2 个核心矩阵（功能点列表 + 接口覆盖矩阵）
+  - 删除：业务规则覆盖矩阵、页面/路由矩阵、验收场景矩阵、字段清单、规则执行模板
+  - ACxx 编号回归 §3 自然语言验收标准
+- **简化 tasks.md 模板**（119 行 → 71 行）：必填字段从 9 个降到 4 个
+- **自评分卡 4 维度 → 1 维度**：保留"自评分（0-100）+ 扣分理由"
+- **反"AI 编造"铁律 5 条 → 2 条**：保留"原始输出粘贴" + "强制负面声明"
+- **复杂度分级 3 档 → 2 档**：🟢 轻 / 🔴 重
+- **AGENTS.md.template**（354 行 → 243 行）：术语收敛，删除重复铁律
+
+### 新增
+
+- **`/spec:lite` 命令**：真正的轻量需求路径。5 节迷你 spec（对话里写不建文件）→ 直接编码 → 自测 → commit。bug 修复、UI 调整、小功能都可走此路径
+- **React + Express stack-adapter**（`framework/stack-adapters/react-express.md`）：覆盖最常见的 Node.js 全栈方案
+- **Next.js stack-adapter**（`framework/stack-adapters/nextjs.md`）：覆盖 App Router 13+ 现代 Next.js
+- **真测试**：`test/` 目录，37 个测试用例覆盖 adapters / detectStack / CLI / install / uninstall，使用 Node 18+ 内置 test runner，零外部依赖
+- **GitHub Actions CI**：`.github/workflows/test.yml`，在 Ubuntu/macOS/Windows × Node 18/20/22 矩阵上自动跑测试 + 构建
+
+### 保留（核心价值）
+
+- "No Spec, No Code" 三条核心法则
+- 逐 task 停顿节奏
+- E2E 浏览器冒烟（系统 Chrome）
+- 骨架组件检测
+- Guard hash 校验护栏
+- 多工具适配器（6 个）
+- knowledge/ 知识沉淀
+
+### 量化对比
+
+| 指标 | v3.14 | v4.0 |
+|------|-------|------|
+| spec.md 模板行数 | 247 | 91（-63%）|
+| tasks.md 必填字段 | 9 | 4（-56%）|
+| AGENTS.md 行数 | 354 | 243（-31%）|
+| stack-adapter 数 | 1 | 3 |
+| 测试用例数 | 0 | 37 |
+| 测试覆盖关键模块 | 无 | adapters/CLI/install |
+
+### 迁移指南（v3 → v4）
+
+1. **运行 `spec-copilot update --force`** 升级模板和提示词
+2. 现存的 `spec_copilot/changes/<name>/spec.md` 仍可用，但新建的 spec 会用简化模板
+3. 如果之前用了 RULE-CHECK DSL，相关 YAML 块仍会被 spec 模板解析（不影响），但 gate 不再执行运行时校验
+4. 复杂度 🟡 中等 → 自动归入 🔴 重，流程不变（propose → apply → smoke → review → archive）
+
+---
+
 ## [3.14.0] - 2026-05-24
 
 ### 修复

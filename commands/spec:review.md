@@ -2,32 +2,25 @@
 description: 三阶段审查（Spec 合规独立 agent + 代码质量 + 破坏性测试）
 ---
 
-请按 AGENTS.md 中定义的 /review 流程执行：
+请按 /review 流程执行：
 
 **变更名**：$ARGUMENTS
 
 ## 前置检查
 
-运行 `npx @alenfitz/spec-copilot gate <变更名> review`（跨平台门禁检查）
+```bash
+npx @alenfitz/spec-copilot gate <变更名> review
+```
 
-gate review 自动执行以下代码级校验（不依赖 AI 判断）：
-- **API 契约校验**：spec API → 前端调用 + 后端实现匹配（优先使用 §6.1 精确映射）
-- **契约一致性**：前端请求字段 vs 后端必填字段，snake_case 风格检查
-- **Fxx↔ACxx 双向追踪**：功能点与验收场景必须双向关联
-- **Vxx 规则覆盖**：触发点、错误文案、生效层落地证据
-- **RULE-CHECK 结构完整性**：DSL 块的 id/kind/when/expect 齐全 + 字段与 §6.2 一致
-- **RULE-CHECK API 绑定**：有 `api: APIxx` 的规则，检查前后端实现证据
-- **错误处理审计**：所有 API 调用点是否有 catch/error 处理
+gate review 自动执行：
+- **API 契约校验**：spec §6.1 接口矩阵 → 前端调用 + 后端实现匹配
+- **契约一致性**：前端请求字段 vs 后端必填字段
+- **错误处理审计**：所有 API 调用点是否有 catch
 - **硬编码身份检测**：前端是否写死当前用户/操作人
-- **对抗性测试**（有运行中后端时自动触发）：SQL 注入、XSS、边界值攻击
 
 ## 阶段一：Spec Compliance（强制独立 agent）
 
-> v2.0.0+ 引入：必须使用 `spec-compliance-reviewer` agent profile。
-
-**Claude Code**（profile 已安装到 `.claude/agents/spec-compliance-reviewer.md`）：
-
-调用样例：
+**Claude Code**：
 ```
 Agent({
   subagent_type: "spec-compliance-reviewer",
@@ -38,83 +31,52 @@ Agent({
 - tasks.md: spec_copilot/changes/<变更名>/tasks.md
 - 项目根目录: <当前 cwd>
 
-按你 profile 中 Step 1-6 顺序执行，输出严格遵循 profile §7 输出格式。`
+按 profile 执行，严格按输出格式返回报告。`
 })
 ```
 
-**opencode**（profile 已安装到 `.opencode/agent/spec-compliance-reviewer.md`）：
+**opencode**：用 task 工具，subagent_type=spec-compliance-reviewer。
 
-调用样例（opencode Task 工具）：
-```
-task subagent_type=spec-compliance-reviewer
-  description="Spec 合规独立审查"
-  prompt:
-    请按你的角色 profile 完成对 <变更名> 的合规审查。
-    输入：
-    - spec.md: spec_copilot/changes/<变更名>/spec.md
-    - tasks.md: spec_copilot/changes/<变更名>/tasks.md
-    - 项目根目录: <当前 cwd>
-    按 profile Step 1-6 执行，严格按 §7 输出格式返回报告。
-```
+**其它宿主**：主 agent 自己 Read profile 扮演执行，报告顶部标"独立性降级"。
 
-**其它宿主**（cursor / windsurf / copilot / cline）：
-1. 主 agent 自己 Read `spec_copilot/agents/spec-compliance-reviewer.md`，扮演该角色执行
-2. 报告顶部加 `⚠️ 未使用独立 agent，结论可靠性降级`
-3. 在结论里加：`独立性：降级`
+**子 agent 返回后，主 agent 不得 override 或软化结论。**
 
-**调用方法用 `npx @alenfitz/spec-copilot doctor` 检测**：如果显示"宿主支持 sub-agent"，使用前两种方式；否则用降级方式。
+阶段一不通过（功能点覆盖率太低或有 Critical 不一致）→ 返回 `/spec:fix`。
 
-子 agent 返回报告后，**主 agent 不得 override 或软化结论**，必须把报告原样嵌入 spec.md §12。
-
-阶段一不通过（覆盖率 < 80% 或有 Critical 不一致）→ 直接返回 `/spec:fix`，不进入阶段二。
-
-## 阶段二：Code Quality（附录 B）
+## 阶段二：Code Quality
 
 按 Critical / Important / Minor 三级审查。
-加载 `spec_copilot/stack-adapters/<栈>.md` §10 栈相关检查项。
+加载 `spec_copilot/stack-adapters/<栈>.md` §10 栈相关检查。
 
-## 阶段三：Adversarial Test（🔴 强制 / 🟡 可选）
+## 阶段三：Adversarial Test（🔴 复杂需求强制）
 
-> v2.0.0 引入：🔴 复杂需求必须跑破坏性测试，🟡 可由用户选择是否跑。
+阶段一二都通过后跑。
+调用 `subagent_type: adversarial-tester`，提供 spec + 项目根 + 阶段一报告。
 
-**何时跑**：阶段一和阶段二都通过后。
-
-**Claude Code / opencode**（profile 已安装到宿主 agent 目录）：
-- 调用 `subagent_type: adversarial-tester`
-- 提供变更名 + spec.md/tasks.md 路径 + 阶段一报告 + 项目根路径
-
-**其它宿主**：主 agent Read `spec_copilot/agents/adversarial-tester.md` 扮演该角色，标注降级。
-
-阶段三发现 Critical 缺陷 → 返回 `/spec:fix`，修复后重跑阶段三。
+阶段三发现 Critical → `/spec:fix` 修复后重跑阶段三。
 
 ## 完成后
 
-把三个阶段的报告**合并**写入 spec.md §12 审查结论，并填写 §12.1 功能点闭环评分表和 §12.2 规则覆盖评分表（必须含：覆盖率数字、Critical 数、契约一致性结果、追踪完整性、Adversarial Critical 数）。
+三阶段报告合并写入 spec.md §12，必须含：覆盖率数字、Critical 数、契约一致性结果。
 
-## 结束后
+## 输出
 
-读取 spec.md §2 复杂度等级后输出：
+**通过（Critical=0）**：
 
-**通过（Critical=0）：**
+🔴 复杂需求：
+```
+审查通过 ✓
+→ 下一步：/spec:test <变更名>（测试后 /spec:archive）
+```
 
-🟡 中等需求：
+🟡 其它：
 ```
 审查通过 ✓
 → 下一步：/spec:archive <变更名>
 ```
 
-🔴 复杂需求：
+**需修复**：
 ```
-审查通过 ✓
-→ 下一步：/spec:test <变更名>
-（测试通过后 /spec:archive）
+审查未通过 ✗（<N> 个 Critical）
+→ /spec:fix <变更名> <问题>
 ```
-
-**需修复（Critical>0，所有等级）：**
-```
-审查未通过 ✗（<N> 个 Critical 问题）
-→ 下一步：/spec:fix <变更名> <问题描述>
-（修复后自动重新 /spec:review）
-```
-
-如参数含 --full，执行全量 review（扫描整个代码库）；否则仅扫描本次变更文件。

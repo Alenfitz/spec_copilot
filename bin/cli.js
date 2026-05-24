@@ -412,7 +412,9 @@ function cmdInstall(args) {
   }
   log.info('  2. 选择或创建 stack-adapters/<你的栈>.md');
   log.info('  3. 填写 rules/domain-rules.md 业务约束（可选）');
-  log.info('  4. 开始使用：/spec:propose <你的第一个需求>');
+  log.info('  4. 开始使用：');
+  log.info('     - 轻量需求（bug 修复 / 小改动）：/spec:lite <需求>');
+  log.info('     - 重量需求（新 API / 改表 / 核心流程）：/spec:propose <需求>');
   log.info('');
   log.info('验证安装：npx @alenfitz/spec-copilot doctor');
   if (targetAdapters.length > 1) {
