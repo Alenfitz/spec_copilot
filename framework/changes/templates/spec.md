@@ -47,6 +47,7 @@
 ```yaml
 RULE-CHECK:
   id: V01
+  api: API01
   kind: compare_datetime
   when: "提交签发"
   input:
@@ -60,9 +61,10 @@ RULE-CHECK:
 
 > 约定：
 > 1. `id` 必须对应已有 `Vxx`。
-> 2. `kind` 先使用统一枚举：`required` / `enum` / `compare_datetime` / `state_transition` / `idempotent`。
-> 3. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
-> 4. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到。
+> 2. 字段型规则（`required` / `enum` / `compare_datetime`）应声明 `api: APIxx`，绑定到 §6.1 / §6.2 的具体接口。
+> 3. `kind` 先使用统一枚举：`required` / `enum` / `compare_datetime` / `state_transition` / `idempotent`。
+> 4. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
+> 5. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到，并能落到绑定接口的前端调用方 / 后端实现入口。
 
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |

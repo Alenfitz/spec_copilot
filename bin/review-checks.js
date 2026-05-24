@@ -144,6 +144,7 @@ function extractRuleCheckBlocks(specContent) {
       raw: body,
       id: get('id'),
       kind: get('kind'),
+      apiId: get('api'),
       when: get('when'),
       left: get('left'),
       op: get('op'),
@@ -276,6 +277,64 @@ function isSnakeCase(name) {
 
 function normalizeApiPath(pathname) {
   return pathname.replace(/\{[^}]+\}/g, '').replace(/:[a-zA-Z_][\w-]*/g, '').replace(/\/+$/, '');
+}
+
+function resolveFrontendCoverageCall(projectRoot, apiRow, frontApiCalls) {
+  if (apiRow.frontendCaller) {
+    const [frontFile, frontFn] = apiRow.frontendCaller.split('#');
+    const normalizedFile = (frontFile || '').replace(/\\/g, '/');
+    const exact = frontApiCalls.find(item =>
+      item.file.replace(/\\/g, '/') === normalizedFile && item.fnName === frontFn
+    );
+    if (exact) return exact;
+  }
+  return frontApiCalls.find(item =>
+    item.method === apiRow.method &&
+    normalizeApiPath(item.path) === normalizeApiPath(apiRow.path)
+  );
+}
+
+function resolveBackendCoverageCall(projectRoot, apiRow, backendApis) {
+  if (apiRow.backendEntry) {
+    const [backClass, backFn] = apiRow.backendEntry.split('#');
+    const exact = backendApis.find(item =>
+      item.fnName === backFn && item.file.includes(backClass || '')
+    );
+    if (exact) return exact;
+  }
+  return backendApis.find(item =>
+    item.method === apiRow.method &&
+    normalizeApiPath(item.path) === normalizeApiPath(apiRow.path)
+  );
+}
+
+function fieldExistsInChecklistRows(rows, field, includeResponse = false) {
+  if (!field) return false;
+  return rows.some(row => {
+    const pools = [
+      ...(row.requiredFields || []),
+      ...(row.optionalFields || []),
+      ...(includeResponse ? (row.responseFields || []) : []),
+    ];
+    return pools.includes(field);
+  });
+}
+
+function hasFieldEvidenceInFrontend(frontCall, field) {
+  if (!frontCall || !field) return false;
+  return frontCall.requestFields.includes(field) || frontCall.body.includes(field);
+}
+
+function hasFieldEvidenceInBackend(projectRoot, backendCall, field) {
+  if (!backendCall || !field) return false;
+  if (backendCall.requiredFields.includes(field) || backendCall.rawParams.includes(field)) return true;
+  const content = readSafe(path.join(projectRoot, backendCall.file));
+  return content.includes(field);
+}
+
+function hasErrorMessageEvidence(projectRoot, filePath, errorMessage) {
+  if (!filePath || !errorMessage) return false;
+  return readSafe(path.join(projectRoot, filePath)).includes(errorMessage);
 }
 
 // ─── Check 1: API 契约校验 ──────────────────────────────────
@@ -674,6 +733,8 @@ function checkRuleCoverage(projectRoot, specContent) {
   const useGit = isGitRepo(projectRoot);
   const apiCoverage = extractApiCoverageMatrix(specContent);
   const apiFieldChecklist = extractApiFieldChecklist(specContent);
+  const frontApiCalls = extractFrontApiCalls(projectRoot);
+  const backendApis = extractBackendApiContracts(projectRoot);
   const feRoots = ['frontend/src', 'app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
   const beRoots = ['backend/src', 'src/main'].filter(r => fs.existsSync(path.join(projectRoot, r)));
   const allRoots = [...feRoots, ...beRoots];
@@ -698,6 +759,7 @@ function checkRuleCoverage(projectRoot, specContent) {
 
   const ruleBlocks = extractRuleCheckBlocks(specContent);
   const knownKinds = new Set(['required', 'enum', 'compare_datetime', 'state_transition', 'idempotent']);
+  const fieldAwareKinds = new Set(['required', 'enum', 'compare_datetime']);
 
   const results = rules.map((rule) => {
     const dsl = ruleBlocks.find(block => block.id === rule.id);
@@ -724,9 +786,25 @@ function checkRuleCoverage(projectRoot, specContent) {
       missing.push('验证方式声明');
     }
     if (dsl) {
+      const boundApiRows = dsl.apiId ? apiCoverage.filter(api => api.id === dsl.apiId) : [];
+      const boundChecklistRows = dsl.apiId ? apiFieldChecklist.filter(api => api.id === dsl.apiId) : [];
+      const boundFrontCall = boundApiRows[0] ? resolveFrontendCoverageCall(projectRoot, boundApiRows[0], frontApiCalls) : null;
+      const boundBackendCall = boundApiRows[0] ? resolveBackendCoverageCall(projectRoot, boundApiRows[0], backendApis) : null;
+      const fieldChecklistScope = boundChecklistRows.length > 0 ? boundChecklistRows : apiFieldChecklist;
+      const fieldRefs = uniq([dsl.left, dsl.right]);
+
       if (!knownKinds.has(dsl.kind)) missing.push('RULE-CHECK.kind 非法');
       if (!dsl.when) missing.push('RULE-CHECK.when');
       if (!dsl.errorMessage && /异常|错误|文案|拦截/i.test(rule.outcome)) missing.push('RULE-CHECK.error_message');
+      if (fieldAwareKinds.has(dsl.kind) && !dsl.apiId) {
+        missing.push('RULE-CHECK.api 缺少 API 绑定');
+      }
+      if (dsl.apiId && boundApiRows.length === 0) {
+        missing.push('RULE-CHECK.api 未在 API 覆盖矩阵中声明');
+      }
+      if (dsl.apiId && boundChecklistRows.length === 0) {
+        missing.push('RULE-CHECK.api 缺少契约字段清单');
+      }
       if (dsl.kind === 'compare_datetime' && (!dsl.left || !dsl.op || !dsl.right)) {
         missing.push('RULE-CHECK.compare_datetime 参数不完整');
       }
@@ -734,35 +812,58 @@ function checkRuleCoverage(projectRoot, specContent) {
         missing.push('RULE-CHECK.required 字段缺失');
       }
       if (dsl.kind === 'required') {
-        const fieldFoundInChecklist = apiFieldChecklist.some(api =>
-          api.requiredFields.includes(dsl.left) || api.optionalFields.includes(dsl.left)
-        );
+        const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.left);
         if (!fieldFoundInChecklist) {
           missing.push('RULE-CHECK.required 字段未出现在 API 字段清单');
         }
       }
       if (dsl.kind === 'enum') {
-        const fieldFoundInChecklist = apiFieldChecklist.some(api =>
-          api.requiredFields.includes(dsl.left) || api.optionalFields.includes(dsl.left) || api.responseFields.includes(dsl.left)
-        );
+        const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.left, true);
         if (!fieldFoundInChecklist) {
           missing.push('RULE-CHECK.enum 字段未出现在 API 字段清单');
         }
       }
       if (dsl.kind === 'compare_datetime') {
-        const fieldsFound = [dsl.left, dsl.right].every(field =>
-          apiFieldChecklist.some(api =>
-            api.requiredFields.includes(field) || api.optionalFields.includes(field) || api.responseFields.includes(field)
-          )
-        );
+        const fieldsFound = [dsl.left, dsl.right].every(field => fieldExistsInChecklistRows(fieldChecklistScope, field, true));
         if (!fieldsFound) {
           missing.push('RULE-CHECK.compare_datetime 字段未在 API 字段清单中闭环');
         }
       }
       if (dsl.errorMessage) {
-        const errorFieldDeclared = apiFieldChecklist.some(api => api.errorFields.length > 0);
+        const errorRows = boundChecklistRows.length > 0 ? boundChecklistRows : apiFieldChecklist;
+        const errorFieldDeclared = errorRows.some(api => api.errorFields.length > 0);
         if (!errorFieldDeclared) {
           missing.push('RULE-CHECK.error_message 缺少 API 错误字段支撑');
+        }
+      }
+      if (dsl.apiId && /前端|双端/i.test(rule.layer) && !boundFrontCall) {
+        missing.push('RULE-CHECK.api 前端调用方未解析');
+      }
+      if (dsl.apiId && /后端|双端/i.test(rule.layer) && !boundBackendCall) {
+        missing.push('RULE-CHECK.api 后端实现入口未解析');
+      }
+      if (dsl.apiId && fieldAwareKinds.has(dsl.kind) && /前端|双端/i.test(rule.layer) && boundFrontCall) {
+        const allFieldsCovered = fieldRefs.every(field => hasFieldEvidenceInFrontend(boundFrontCall, field));
+        if (!allFieldsCovered) {
+          missing.push('RULE-CHECK.api 前端调用方缺少规则字段证据');
+        }
+      }
+      if (dsl.apiId && fieldAwareKinds.has(dsl.kind) && /后端|双端/i.test(rule.layer) && boundBackendCall) {
+        const allFieldsCovered = fieldRefs.every(field => hasFieldEvidenceInBackend(projectRoot, boundBackendCall, field));
+        if (!allFieldsCovered) {
+          missing.push('RULE-CHECK.api 后端实现入口缺少规则字段证据');
+        }
+      }
+      if (dsl.apiId && dsl.errorMessage && /后端|双端/i.test(rule.layer) && boundBackendCall) {
+        if (!hasErrorMessageEvidence(projectRoot, boundBackendCall.file, dsl.errorMessage)) {
+          missing.push('RULE-CHECK.error_message 未落到绑定 API 实现');
+        }
+      }
+      if (dsl.apiId && dsl.errorMessage && /前端|双端/i.test(rule.layer) && boundFrontCall) {
+        const frontMessageCovered = hasErrorMessageEvidence(projectRoot, boundFrontCall.file, dsl.errorMessage);
+        const backMessageCovered = boundBackendCall ? hasErrorMessageEvidence(projectRoot, boundBackendCall.file, dsl.errorMessage) : false;
+        if (!frontMessageCovered && !backMessageCovered) {
+          missing.push('RULE-CHECK.error_message 未落到绑定 API 链路');
         }
       }
       if (apiCoverage.length === 0) {
