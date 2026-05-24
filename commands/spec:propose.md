@@ -39,6 +39,28 @@ Write: spec_copilot/changes/<变更名>/log.md
 
 🔴 复杂需求还需额外创建 `tasks.md`（以 `spec_copilot/changes/templates/tasks.md` 为模板）。
 
+### ⚠️ 矩阵必填（gate 会自动消费，不填 = gate 失败）
+
+spec.md 中以下矩阵**必须填写**，空矩阵 = 后续 gate 无法校验：
+
+1. **§3.1 功能点覆盖矩阵** — 每个 Fxx 填前端入口 + 后端 API + ACxx 关联
+2. **§4.1 业务规则覆盖矩阵** — 每个 Vxx 填生效层 + 触发点 + 错误文案 + 验证方式
+3. **§6.1 接口覆盖矩阵** — 每个 APIxx 填前端调用方（函数级）+ 后端实现入口（类/方法级）+ 字段风格
+4. **§7.1 页面/路由矩阵** — 每个 PAGExx 填路由 + 依赖 API + 关键交互
+5. **§10.5 验收场景矩阵** — 每个 ACxx 填类型（happy/rule/error）+ 步骤 + 预期 + 关联 Fxx/Vxx
+
+**追踪约束**：每个 Fxx 必须绑定至少一个 ACxx，每个 ACxx 必须回指 Fxx 或 Vxx。
+
+### RULE-CHECK（推荐，v3.7+）
+
+对关键 Vxx 业务规则，在 §4.2 编写 RULE-CHECK YAML 块。优先覆盖：
+- `required` / `enum` — 字段校验类
+- `compare_datetime` — 时间比较类
+- `state_transition` — 状态流转类（声明 field/from/to）
+- `idempotent` — 幂等类（声明 key/repeat）
+
+绑定 `api: APIxx` 可让 gate 检查字段是否落到前后端实现。
+
 写完文件后，用 Read 确认内容，然后展示摘要。
 
 ## Step 3 — §9 检查（自动模式关键决策点）

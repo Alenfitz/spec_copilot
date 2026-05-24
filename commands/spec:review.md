@@ -10,6 +10,17 @@ description: 三阶段审查（Spec 合规独立 agent + 代码质量 + 破坏�
 
 运行 `npx @alenfitz/spec-copilot gate <变更名> review`（跨平台门禁检查）
 
+gate review 自动执行以下代码级校验（不依赖 AI 判断）：
+- **API 契约校验**：spec API → 前端调用 + 后端实现匹配（优先使用 §6.1 精确映射）
+- **契约一致性**：前端请求字段 vs 后端必填字段，snake_case 风格检查
+- **Fxx↔ACxx 双向追踪**：功能点与验收场景必须双向关联
+- **Vxx 规则覆盖**：触发点、错误文案、生效层落地证据
+- **RULE-CHECK 结构完整性**：DSL 块的 id/kind/when/expect 齐全 + 字段与 §6.2 一致
+- **RULE-CHECK API 绑定**：有 `api: APIxx` 的规则，检查前后端实现证据
+- **错误处理审计**：所有 API 调用点是否有 catch/error 处理
+- **硬编码身份检测**：前端是否写死当前用户/操作人
+- **对抗性测试**（有运行中后端时自动触发）：SQL 注入、XSS、边界值攻击
+
 ## 阶段一：Spec Compliance（强制独立 agent）
 
 > v2.0.0+ 引入：必须使用 `spec-compliance-reviewer` agent profile。
@@ -78,7 +89,7 @@ task subagent_type=spec-compliance-reviewer
 
 ## 完成后
 
-把三个阶段的报告**合并**写入 spec.md §12 审查结论（必须含：覆盖率数字、Critical 数、Adversarial Critical 数）。
+把三个阶段的报告**合并**写入 spec.md §12 审查结论，并填写 §12.1 功能点闭环评分表和 §12.2 规则覆盖评分表（必须含：覆盖率数字、Critical 数、契约一致性结果、追踪完整性、Adversarial Critical 数）。
 
 ## 结束后
 

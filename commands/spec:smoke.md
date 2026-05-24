@@ -20,14 +20,18 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 - 前后端构建验证（npm run build / mvn compile）
 - 骨架组件检测（el-empty / TODO-only / 空壳组件）
 - TypeScript any 泛滥检测（warning 级别）
-- **E2E 联调校验**（v2.7.0+，使用系统 Chrome，无需额外安装）：
+- **E2E 联调校验**（使用系统 Chrome，无需额外安装）：
   - 自动启动/检测前后端开发服务器
   - 从 spec.md 提取页面路由，用 headless Chrome 逐页面检查
   - **L1 基础检查**：白屏、JS 异常、框架错误遮罩
   - **L2 联调检查**：API 4xx/5xx、API 返回非 JSON、空数据渲染、控制台 API 错误
-  - **L3 交互测试**：搜索框输入验证、分页点击验证、表单提交验证
+  - **L3 交互测试**：搜索框输入验证、分页点击验证、表单提交验证、详情打开/回跳、弹层关闭
   - 完成后自动关闭启动的服务器
-- **客观评分**（v2.9.0+）：按维度打分（满分 100），与 AI 自评对比
+- **ACxx 验收场景覆盖**：解析 spec.md §10.5 的 ACxx 矩阵，按步骤级判定 covered/partial/missing。happy 场景未闭环 = gate 失败
+- **RULE-CHECK 运行时证据**：当 AC 场景触发绑定 API 时，收集字段/状态码/错误文案，与 DSL 预期对比
+- **API Schema 校验**：从 §6 提取响应字段，与实际 API 响应比对
+- **截图对比**：自动截图保存，与上次对比检测 UI 回归
+- **客观评分**：按维度打分（满分 100），与 AI 自评对比，偏差 > 30 = gate 失败
 
 可选 flags：
 - `--headed`：显示浏览器窗口（调试用）

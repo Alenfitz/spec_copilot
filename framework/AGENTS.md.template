@@ -158,26 +158,66 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 
 | 门禁 | 检查项 | 失败时阻止进入 |
 |------|--------|-------------|
-| `apply` | spec.md 存在 + §9 清空 +（🔴）tasks.md 存在 + **前后端 task 交织度** + **前端 task 粒度上限** | /spec:apply |
-| `smoke` | **前后端构建验证** + **骨架组件检测** + TypeScript any 检测 + **E2E 浏览器冒烟** | /spec:smoke |
-| `review` | smoke 哨兵 + 冒烟记录 + 所有 task 已提交 + **骨架组件检测** + **前端 task 功能性自证** | /spec:review |
+| `apply` | spec.md 存在 + §9 清空 +（🔴）tasks.md 存在 + 前后端 task 交织度 + 前端 task 粒度上限 | /spec:apply |
+| `smoke` | 前后端构建验证 + 骨架组件检测 + TS any 检测 + **E2E 浏览器冒烟** + **ACxx 验收场景覆盖** + **RULE-CHECK 运行时证据** | /spec:smoke |
+| `review` | smoke 哨兵 + **Fxx↔ACxx 双向追踪** + **Vxx 规则覆盖** + **API 契约一致性** + **RULE-CHECK 结构完整性** + 硬编码身份检测 | /spec:review |
 | `test` | 🔴 复杂需求强制进入 | /spec:test |
 | `archive` | spec.md §12 审查结论为通过 + review 哨兵 | /spec:archive |
 
 门禁不通过 → 阻断当前阶段，提示缺失的前置条件。不允许跳过。
 
-**v2.2.0 前端硬检测**（加粗项为新增）：
-- `apply` gate 阻止前端 task 被挤到最后（连续 > 3 个后端 task = fail）和粒度过大（单 task > 4 个 .vue = fail）
-- `smoke` gate 执行客观构建验证和骨架组件扫描，不依赖 AI 自述
-- `review` gate 双重兜底：骨架检测 + 前端 task 必须有构建输出和用户操作路径
+### Spec 结构化矩阵（v3.2.0+ 引入，gate 自动消费）
 
-**v2.3.0 E2E 浏览器冒烟**（解决"静态检查通过但浏览器不能用"）：
-- `smoke` gate 新增 Playwright 端到端浏览器验证：自动启动开发服务器 → 逐页面检查白屏/JS异常/API失败/错误遮罩
+spec.md 模板中包含 5 个覆盖矩阵，**你（AI）在 /spec:propose 时必须填写**，gate 会按矩阵校验：
+
+| 矩阵 | 位置 | gate 如何消费 |
+|------|------|-------------|
+| **功能点覆盖矩阵**（§3.1） | Fxx → 前端入口 + 后端API + ACxx | review 按此统计功能点覆盖率 |
+| **业务规则覆盖矩阵**（§4.1） | Vxx → 生效层 + 触发点 + 错误文案 | review 按此检查规则落地证据 |
+| **接口覆盖矩阵**（§6.1） | APIxx → 前端调用方 + 后端实现入口 | review 用精确映射替代模糊 grep |
+| **页面/路由矩阵**（§7.1） | PAGExx → 路由 + 依赖 API + 交互 | smoke E2E 按此提取测试页面 |
+| **验收场景矩阵**（§10.5） | ACxx → 类型 + 步骤 + 预期 + Fxx/Vxx | smoke 按步骤覆盖判定闭环 |
+
+**核心约束**：
+- 每个 Fxx 必须关联至少一个 ACxx，每个 ACxx 必须回指 Fxx 或 Vxx（review gate 校验双向追踪）
+- happy 类型的 ACxx 如果没有页面/API/交互闭环证据 → smoke gate 直接失败
+- 接口覆盖矩阵的 `前端调用方` 和 `后端实现入口` 必须精确到函数级（review 精确匹配优先于模糊 grep）
+
+### RULE-CHECK DSL（v3.7.0+ 引入）
+
+spec.md §4.2 可为 Vxx 业务规则编写 YAML 格式的可执行规则模板：
+
+```yaml
+RULE-CHECK:
+  id: V01
+  api: API01          # 绑定到接口覆盖矩阵
+  kind: compare_datetime  # required / enum / compare_datetime / state_transition / idempotent
+  when: "提交签发"
+  input:
+    left: sign_time
+    op: "<="
+    right: planned_start_time
+  expect:
+    success: false
+    error_message: "签发时间不得晚于计划开工时间"
+```
+
+**gate 如何消费**：
+- review：校验 DSL 结构完整性 + 字段与 §6.2 API 字段清单一致性 + 绑定接口的前后端证据
+- smoke：当 AC 场景触发绑定 API 时，收集运行时证据（请求字段/状态码/错误文案）
+- `state_transition` 声明 `field/from/to`，review 检查状态迁移证据
+- `idempotent` 声明 `key/repeat`，smoke 尝试重复提交检测前端防重 vs 后端幂等
+
+### E2E 浏览器冒烟
+
+- `smoke` gate 使用 Playwright + 系统 Chrome 执行端到端验证
 - Spec-driven 路由提取：从 spec.md + router 文件自动生成测试页面列表
-- 内置 playwright-core，使用系统 Chrome，用户无需额外安装任何依赖
+- 内置 playwright-core，用户无需额外安装任何依赖
 - 未找到系统 Chrome 时自动跳过（warning 级别）
+- ACxx 验收场景按步骤级判定覆盖（v3.3.0+），happy 场景未闭环 = gate 失败
 
-**v2.6.0 Guard 代码级护栏**（解决"AI 不遵守提示词铁律"）：
+### Guard 代码级护栏
+
 - **主防线：hash 校验 @ gate 时** — 锁定文件记录 sha256 hash，gate 运行时校验，不一致 = gate 直接失败
 - **效果**：AI 可以改文件，但改了过不了 gate — 等于白改
 - gate 通过后自动锁定 spec.md（hash 记录在 `.spec-copilot/locks.json`）
@@ -235,11 +275,14 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 
 使用 `npx @alenfitz/spec-copilot agents list` 查看可用 profile，`npx @alenfitz/spec-copilot doctor` 检测宿主是否支持 sub-agent。
 
-1. **逐功能点 Grep**：对 spec 每个功能点编号（如 F01、F02），必须执行 `grep -rn` 或 `Read` 在代码中定位实现，输出匹配的文件路径和行号
-2. **逐规则 Grep**：对 spec 每条业务规则编号（如 V01、V02），必须在 Service/Controller 层搜索对应的条件判断，输出匹配证据
-3. **前后端均验证**：后端有对应 API ≠ 功能已实现。必须同时验证前端是否有调用该 API 的页面/组件，且交互完整（按钮可点击、表单有绑定、提交有反馈）
-4. **空实现检测**：Grep 检查是否存在 `TODO`、`/* */` 空方法体、`Promise.resolve()` 占位。发现即标记为 ❌ 未实现
-5. **覆盖率统计**：最终输出 `已实现/总功能点` 比率。**低于 80% 直接判定不合规，不得通过**
+1. **逐功能点验证**（优先使用 §3.1 覆盖矩阵的精确映射，无矩阵时 fallback 到 grep）
+2. **逐规则验证**（优先使用 §4.1 规则覆盖矩阵的触发点/错误文案，验证代码中有对应实现）
+3. **前后端均验证**：后端有对应 API ≠ 功能已实现。必须同时验证前端是否有调用该 API 的页面/组件，且交互完整
+4. **空实现检测**：Grep 检查 `TODO`、空方法体、`Promise.resolve()` 占位。发现即 ❌
+5. **覆盖率统计**：`已实现/总功能点`，**< 80% = 不合规**
+6. **Fxx↔ACxx 追踪**：每个 Fxx 必须关联 ACxx，每个 ACxx 必须回指 Fxx/Vxx，断链 = 需求漂移风险
+7. **契约一致性**：前端请求字段 vs 后端必填字段，snake_case 风格一致性
+8. **RULE-CHECK 验证**：有 DSL 块的规则，检查结构完整性 + 字段与 §6.2 一致 + 绑定接口前后端证据
 
 ### 审查维度
 1. **缺失实现**：spec 要求了但代码没做的
@@ -248,41 +291,55 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 4. **业务规则落地**：spec 中的规则是否全部体现在代码中
 5. **数据变更准确性**：spec 中的表/字段变更是否准确落地
 6. **前后端一致性**：后端接口是否有前端调用方，前端交互是否完整闭环
+7. **契约一致性**：前端请求字段与后端接收字段是否匹配，字段风格是否一致
+8. **硬编码身份**：前端是否写死了当前用户/操作人/示例人名
 
 ### 具体审查清单（每次 review 逐项执行）
 
-**功能点验证（对应 spec §3）**
-- [ ] 读取 spec.md §3 功能点列表，提取所有功能点编号
-- [ ] 对每个功能点，执行 `grep -rn "<关键字>"` 定位后端实现，记录 `文件:行号`
-- [ ] 对每个功能点，执行 `grep -rn "<关键字>"` 定位前端实现（组件/页面/API 调用），记录 `文件:行号`
+**功能点验证（对应 spec §3 + §3.1 覆盖矩阵）**
+- [ ] 读取 §3.1 功能点覆盖矩阵，提取所有 Fxx 编号及其前端入口/后端 API/ACxx 关联
+- [ ] 有矩阵时用 `前端入口` 和 `后端 API` 精确匹配代码；无矩阵时 fallback grep
 - [ ] 对有实现的功能点，`Read` 对应代码段，确认非空实现（非 TODO/占位）
+- [ ] 检查每个 Fxx 是否关联了至少一个真实存在的 ACxx（双向追踪）
 - [ ] 检查是否有 spec 未提及但代码中多出的接口（YAGNI 违规）
 
-**业务规则验证（对应 spec §4）**
-- [ ] 读取 spec.md §4 业务规则列表，提取所有规则编号
-- [ ] 对每条规则，在 Service 层 `grep -rn` 对应的条件判断逻辑，记录 `文件:行号`
-- [ ] 验证规则的边界条件是否在代码中体现（Read 对应代码段确认）
+**业务规则验证（对应 spec §4 + §4.1 覆盖矩阵 + §4.2 RULE-CHECK）**
+- [ ] 读取 §4.1 规则覆盖矩阵，按"生效层"分别验证前端/后端落点
+- [ ] 对每条 Vxx，验证"触发点"和"错误文案"是否可在代码中搜索到
+- [ ] 有 RULE-CHECK DSL 的规则：校验结构完整性（id/kind/when/expect 齐全）+ 字段与 §6.2 一致
+- [ ] 绑定 `api: APIxx` 的 RULE-CHECK：检查绑定接口的前端调用方和后端实现入口是否存在
+
+**API 契约验证（对应 spec §6 + §6.1 接口覆盖矩阵）**
+- [ ] 读取 §6.1 接口覆盖矩阵，用 `前端调用方` 和 `后端实现入口` 精确匹配
+- [ ] 检查前端请求字段 vs 后端必填字段是否一致
+- [ ] 检查请求/响应字段风格（snake_case vs camelCase）是否与声明一致
+- [ ] 检测前端是否有硬编码当前用户/操作人/示例人名
 
 **数据变更验证（对应 spec §5）**
 - [ ] 读取 spec.md §5 数据变更
 - [ ] 对比 schema / Entity 类，验证表名、字段名、类型、约束一致
 
-**API 契约验证（对应 spec §6）**
-- [ ] 读取 spec.md §6 API 契约
-- [ ] 对比 Controller 代码，验证路径、HTTP 方法、参数名一致
-
 ### 输出格式
 ```
 #### 功能点逐条验证（N/M 通过，覆盖率 XX%）
-- ✅ F01：已实现，后端 `XxxService.java:L42`，前端 `XxxPage.vue:L15`
+- ✅ F01：已实现，后端 `XxxService.java:L42`，前端 `XxxPage.vue:L15`，ACxx: AC01
 - ❌ F02：后端有接口但前端未调用（缺少页面入口）
 - ❌ F03：未实现（grep 无结果）
 - ⚠️ F04：实现方式与 spec 描述有偏差（spec 要求 X，代码实际做了 Y）
-- ❌ F05：空实现（`XxxService.java:L88` 方法体为 TODO）
 
-#### 业务规则逐条验证（N/M 通过）
-- ✅ V01：已实现，见 `XxxService.java:L120` if 判断
+#### 业务规则逐条验证（N/M 通过，RULE-CHECK: K 条）
+- ✅ V01：已实现，见 `XxxService.java:L120` if 判断，RULE-CHECK 结构完整
 - ❌ V02：未找到对应校验逻辑
+
+#### 追踪完整性
+- Fxx→ACxx：N/M 已关联
+- ACxx→Fxx/Vxx：N/M 已回指
+- 断链项：（列出未关联的编号）
+
+#### 契约一致性
+- 前后端字段匹配：N/M 接口一致
+- snake_case 违规：（列出不一致字段）
+- 硬编码身份：（列出或"无"）
 
 #### 覆盖率：功能点 X/Y (Z%)，业务规则 X/Y (Z%)
 #### 结论：✅ Spec 合规（覆盖率 ≥ 80%） / ❌ 不合规（覆盖率 < 80% 或存在 Critical 偏差）

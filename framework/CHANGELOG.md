@@ -40,6 +40,34 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [3.14.0] - 2026-05-24
+
+### 修复
+
+**提示词层同步代码能力（P0 — 解决"代码能力有了但 AI 不知道"）**
+
+v3.2-3.13 在代码层加入了大量新检查能力，但 AGENTS.md.template（AI 唯一读到的主提示词）和所有 commands 文件没有更新，导致 AI 不知道填覆盖矩阵、不知道 RULE-CHECK、不知道 gate 为什么失败。
+
+- **AGENTS.md.template 全面更新**：
+  - 门禁表新增 ACxx 验收覆盖、Fxx↔ACxx 追踪、Vxx 规则覆盖、API 契约一致性、RULE-CHECK 等检查项
+  - 新增"Spec 结构化矩阵"章节，说明 5 个覆盖矩阵的用途和 gate 消费方式
+  - 新增"RULE-CHECK DSL"章节，说明 YAML 规则模板的写法和 gate 校验逻辑
+  - 审查清单和输出格式同步新增追踪完整性、契约一致性、RULE-CHECK 验证维度
+
+- **spec:propose.md 更新**：新增矩阵必填提示 + RULE-CHECK 编写引导
+- **spec:smoke.md 更新**：新增 ACxx 覆盖、RULE-CHECK 运行时证据、API Schema 校验、截图对比说明
+- **spec:review.md 更新**：新增 gate review 自动执行的所有代码级校验项说明 + §12.1/§12.2 评分表填写要求
+- **spec:apply.md 更新**：反"太嗨"必填字段新增业务规则编号、API/PAGE 覆盖、契约一致性自查
+
+- **spec-compliance-reviewer.md agent profile 更新**：
+  - Step 1 新增接口覆盖矩阵和验收场景矩阵提取
+  - Step 2 改为精确映射优先 + ACxx 关联检查
+  - Step 3 改为使用 §4.1 覆盖矩阵按生效层验证 + RULE-CHECK 结构检查
+  - Step 4 新增 API 契约一致性（字段匹配 + snake_case + 硬编码身份）
+  - 输出格式新增追踪完整性、契约一致性、RULE-CHECK 章节 + 自检项扩充
+
+---
+
 ## [3.13.0] - 2026-05-24
 
 ### 新增
