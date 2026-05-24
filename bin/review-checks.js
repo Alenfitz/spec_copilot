@@ -95,6 +95,23 @@ function extractSpecRoutes(specContent) {
   return routes;
 }
 
+function extractRuleMatrix(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(V\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      description: m[2].trim(),
+      layer: m[3].trim(),
+      trigger: m[4].trim(),
+      outcome: m[5].trim(),
+      verification: m[6].trim(),
+    });
+  }
+  return rows;
+}
+
 function extractFrontApiCalls(projectRoot) {
   const feRoots = ['frontend/src', 'app/src', 'src']
     .map(r => path.join(projectRoot, r))
@@ -557,6 +574,77 @@ function checkRouteCompleteness(projectRoot, specContent) {
   };
 }
 
+function checkRuleCoverage(projectRoot, specContent) {
+  const rules = extractRuleMatrix(specContent);
+  if (rules.length === 0) return { pass: true, message: 'spec 中无 Vxx 业务规则矩阵' };
+
+  const useGit = isGitRepo(projectRoot);
+  const feRoots = ['frontend/src', 'app/src', 'src'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+  const beRoots = ['backend/src', 'src/main'].filter(r => fs.existsSync(path.join(projectRoot, r)));
+  const allRoots = [...feRoots, ...beRoots];
+
+  const findMatches = (pattern) => {
+    if (useGit) {
+      return gitGrep(projectRoot, pattern).filter(f => !f.startsWith('spec_copilot/') && !f.endsWith('.md'));
+    }
+    const matches = [];
+    for (const root of allRoots) {
+      const abs = path.join(projectRoot, root);
+      const files = findFiles(abs, ['.vue', '.tsx', '.jsx', '.ts', '.js', '.java', '.kt', '.py', '.go']);
+      for (const file of files) {
+        const content = readSafe(file);
+        if (content.includes(pattern)) {
+          matches.push(path.relative(projectRoot, file));
+        }
+      }
+    }
+    return matches;
+  };
+
+  const results = rules.map((rule) => {
+    const ruleIdHits = findMatches(rule.id);
+    const triggerHits = rule.trigger && rule.trigger !== '-' ? findMatches(rule.trigger) : [];
+    const outcomeHits = rule.outcome && rule.outcome !== '-' ? findMatches(rule.outcome.replace(/[`'"]/g, '')) : [];
+    const verificationDeclared = rule.verification && !/^代码里处理|无|待补|todo$/i.test(rule.verification);
+
+    const frontendHits = uniq(ruleIdHits.filter(f => /\.(vue|tsx|jsx|ts|js)$/.test(f) && /(src|app|pages|views|components|api|store)\//.test(f)));
+    const backendHits = uniq(ruleIdHits.filter(f => /\.(java|kt|py|go)$/.test(f)));
+    const outcomeEvidence = uniq([...triggerHits, ...outcomeHits]);
+    const missing = [];
+
+    if (frontendHits.length === 0 && /前端|双端/i.test(rule.layer)) {
+      missing.push('前端规则落点');
+    }
+    if (backendHits.length === 0 && /后端|双端/i.test(rule.layer)) {
+      missing.push('后端规则落点');
+    }
+    if (outcomeEvidence.length === 0) {
+      missing.push('触发/结果证据');
+    }
+    if (!verificationDeclared) {
+      missing.push('验证方式声明');
+    }
+
+    return {
+      ...rule,
+      frontendHits,
+      backendHits,
+      outcomeEvidence,
+      verificationDeclared,
+      missing,
+      pass: missing.length === 0,
+    };
+  });
+
+  return {
+    pass: results.every(r => r.pass),
+    total: results.length,
+    matched: results.filter(r => r.pass).length,
+    results,
+    missingRules: results.filter(r => !r.pass),
+  };
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────
 
 /**
@@ -646,6 +734,18 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '路由完整性', pass: true, error: e.message });
   }
 
+  // 7. 业务规则覆盖
+  try {
+    const rules = checkRuleCoverage(projectRoot, specContent);
+    checks.push({
+      name: '业务规则覆盖',
+      ...rules,
+    });
+    if (!rules.pass) overallPass = false;
+  } catch (e) {
+    checks.push({ name: '业务规则覆盖', pass: true, error: e.message });
+  }
+
   return { pass: overallPass, checks };
 }
 
@@ -657,4 +757,5 @@ module.exports = {
   checkHardcodedData,
   checkHardcodedIdentities,
   checkRouteCompleteness,
+  checkRuleCoverage,
 };

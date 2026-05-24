@@ -1573,6 +1573,19 @@ async function cmdGate(args) {
               fail(`路由缺失（${check.matched}/${check.total} 匹配）：\n   缺失: ${check.missing.slice(0, 10).join(', ')}`);
             }
           }
+
+          if (check.name === '业务规则覆盖') {
+            if (check.message) {
+              log.info(`${check.name}：${check.message}`);
+            } else if (check.pass) {
+              log.ok(`业务规则覆盖：${check.matched}/${check.total} 条规则均有代码与验证证据`);
+            } else {
+              const msgs = check.missingRules.slice(0, 10).map(item =>
+                `${item.id}: 缺少 ${item.missing.join('、')}`
+              );
+              fail(`业务规则覆盖不足（${check.matched}/${check.total} 完整）：\n   ${msgs.join('\n   ')}`);
+            }
+          }
         }
       } catch (e) {
         log.warn(`独立 Reviewer 检查跳过：${e.message.split('\n')[0]}`);
@@ -1693,8 +1706,9 @@ async function cmdGate(args) {
       } else {
         scoreItems = [
           { name: 'smoke 哨兵', weight: 8, failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
-          { name: '功能点覆盖', weight: 16, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
+          { name: '功能点覆盖', weight: 14, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
           { name: '验收追踪', weight: 12, failPatterns: [/Fxx ↔ ACxx/, /功能点缺少验收场景/, /AC 未关联功能点/, /引用不存在的 AC/] },
+          { name: '业务规则', weight: 10, failPatterns: [/业务规则覆盖不足/, /缺少前端规则落点/, /缺少后端规则落点/, /缺少触发\/结果证据/] },
           { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/] },
           { name: '契约一致性', weight: 12, failPatterns: [/契约一致性/, /缺少必填字段/, /snake_case/] },
           { name: '错误处理', weight: 10, failPatterns: [/错误处理缺失/, /无.*catch/] },

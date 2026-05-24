@@ -152,6 +152,14 @@ This turns “the UI looks complete but the API cannot actually be called” int
 - every `ACxx` must point back to at least one `Fxx` or `Vxx`
 - broken trace links are treated as requirement-matching risk, not just documentation drift
 
+### Vxx Rule Coverage Gate
+
+`review` now also checks whether `Vxx` business rules are actually grounded in implementation evidence:
+
+- frontend / backend rule landing points must exist when the rule says they should
+- trigger points and error/result evidence must be searchable
+- `verification` can no longer be a vague placeholder like "handled in code"
+
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:
