@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { adapters, detectTools, supportedTools, parseAgentMeta } = require('../adapters');
+const { adapters, detectTools, supportedTools, parseAgentMeta, detectStack, buildStackContext } = require('../adapters');
 const {
   detectSkeletonComponents,
   checkBuildable,
@@ -114,18 +114,34 @@ function readFrameworkFile(filename) {
   return fs.readFileSync(filepath, 'utf-8');
 }
 
-/** 解析 --tool 参数或自动检测 */
-function resolveAdapter(args, projectRoot) {
+/** 解析 --tool 参数，支持 --tool all 和 --tool cursor,claude-code */
+function resolveAdapters(args, projectRoot) {
   const toolIdx = args.indexOf('--tool');
   if (toolIdx !== -1 && args[toolIdx + 1]) {
-    const toolName = args[toolIdx + 1];
-    if (!adapters[toolName]) {
-      log.err(`未知工具: ${toolName}`);
-      log.info(`支持的工具: ${supportedTools().join(', ')}`);
-      process.exit(1);
+    const toolArg = args[toolIdx + 1];
+    if (toolArg === 'all') {
+      return Object.values(adapters);
     }
-    return adapters[toolName];
+    const names = toolArg.split(',').map(s => s.trim());
+    const result = [];
+    for (const name of names) {
+      if (!adapters[name]) {
+        log.err(`未知工具: ${name}`);
+        log.info(`支持的工具: ${supportedTools().join(', ')}`);
+        process.exit(1);
+      }
+      result.push(adapters[name]);
+    }
+    return result;
   }
+  return null;
+}
+
+/** 解析 --tool 参数或自动检测（单工具） */
+function resolveAdapter(args, projectRoot) {
+  const multi = resolveAdapters(args, projectRoot);
+  if (multi && multi.length === 1) return multi[0];
+  if (multi && multi.length > 1) return multi[0]; // 向后兼容：非 install 场景取第一个
 
   // 从状态文件读取（已安装时）
   const stateFile = path.join(projectRoot, 'spec_copilot', TOOL_STATE_FILE);
@@ -152,21 +168,41 @@ function resolveAdapter(args, projectRoot) {
 function cmdInstall(args) {
   const projectRoot = findProjectRoot();
   const srcRoot = pkgRoot();
-  let adapter = resolveAdapter(args, projectRoot);
 
-  if (!adapter) {
-    log.err('未检测到 AI 编码工具，请用 --tool 指定：');
-    log.info('');
-    for (const a of Object.values(adapters)) {
-      log.info(`  --tool ${a.name.padEnd(12)} ${a.description}`);
+  // 多工具支持：--tool all 或 --tool cursor,claude-code
+  let targetAdapters = resolveAdapters(args, projectRoot);
+  if (!targetAdapters) {
+    // 单工具兼容
+    const single = resolveAdapter(args, projectRoot);
+    if (!single) {
+      log.err('未检测到 AI 编码工具，请用 --tool 指定：');
+      log.info('');
+      for (const a of Object.values(adapters)) {
+        log.info(`  --tool ${a.name.padEnd(12)} ${a.description}`);
+      }
+      log.info('');
+      log.info('  --tool all             全部工具同时安装');
+      log.info('  --tool cursor,copilot  多工具同时安装');
+      process.exit(1);
     }
-    process.exit(1);
+    targetAdapters = [single];
   }
 
-  log.title(`@alenfitz/spec-copilot install → ${adapter.displayName}`);
+  const toolNames = targetAdapters.map(a => a.displayName).join(', ');
+  log.title(`@alenfitz/spec-copilot install → ${toolNames}`);
   log.info(`项目根目录: ${projectRoot}`);
   log.info(`框架版本:   ${readVersion()}`);
-  log.info(`目标工具:   ${adapter.displayName}`);
+  log.info(`目标工具:   ${toolNames}`);
+
+  // 0. 检测项目技术栈
+  const stack = detectStack(projectRoot);
+  const stackCtx = buildStackContext(stack);
+  if (stackCtx) {
+    const parts = [];
+    if (stack.frontend) parts.push(stack.frontend);
+    if (stack.backend) parts.push(stack.backend);
+    log.ok(`检测到技术栈: ${parts.join(' + ') || '通用'}`);
+  }
 
   // 1. 创建 spec_copilot/ 目录结构
   const scDir = path.join(projectRoot, 'spec_copilot');
@@ -223,42 +259,61 @@ function cmdInstall(args) {
     }
   }
 
-  // 5. 安装命令文件
+  // 5. 安装命令文件（通用 + 各工具专属）
   const commandsSrc = path.join(srcRoot, 'commands');
-  if (adapter.hasNativeCommands && adapter.commandsDir) {
-    // 有原生命令支持 → 拷贝到工具命令目录
-    const cmdDest = path.join(projectRoot, adapter.commandsDir);
-    fs.mkdirSync(cmdDest, { recursive: true });
-    copyDir(commandsSrc, cmdDest);
-    const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
-    log.ok(`${adapter.commandsDir}/ 已安装（${cmdCount} 个斜杠命令）`);
-  }
-
-  // 同时拷贝到 spec_copilot/commands/（所有工具都有，供引用）
   copyDir(commandsSrc, path.join(scDir, 'commands'));
-  if (!adapter.hasNativeCommands) {
-    const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
-    log.ok(`spec_copilot/commands/ 已安装（${cmdCount} 个命令，通过 prompt 路由）`);
+
+  // 6. 为每个目标工具安装适配
+  const rawPrompt = renderPromptTemplate();
+  const promptWithStack = stackCtx ? rawPrompt + '\n' + stackCtx : rawPrompt;
+
+  for (const adapter of targetAdapters) {
+    log.info('');
+    log.info(`─── 安装 ${adapter.displayName} 适配 ───`);
+
+    // 6a. 原生命令目录
+    if (adapter.hasNativeCommands && adapter.commandsDir) {
+      const cmdDest = path.join(projectRoot, adapter.commandsDir);
+      fs.mkdirSync(cmdDest, { recursive: true });
+      copyDir(commandsSrc, cmdDest);
+      const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
+      log.ok(`${adapter.commandsDir}/ 已安装（${cmdCount} 个斜杠命令）`);
+    } else {
+      const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
+      log.ok(`spec_copilot/commands/ 已安装（${cmdCount} 个命令，通过 prompt 路由）`);
+    }
+
+    // 6b. Sub-agent
+    installAgentsForAdapter(adapter, srcRoot, projectRoot);
+
+    // 6c. 主提示词文件
+    const promptPath = path.join(projectRoot, adapter.promptPath);
+    const promptDir = path.dirname(promptPath);
+    if (!fs.existsSync(promptPath)) {
+      fs.mkdirSync(promptDir, { recursive: true });
+      const formattedPrompt = adapter.formatPrompt(promptWithStack);
+      fs.writeFileSync(promptPath, formattedPrompt, 'utf-8');
+      log.ok(`${adapter.promptPath} 已创建`);
+    } else {
+      log.warn(`${adapter.promptPath} 已存在，跳过（update --force 覆盖）`);
+    }
+
+    // 6d. Legacy 根目录文件（.cursorrules / .windsurfrules）
+    if (adapter.legacyPath && adapter.formatLegacy) {
+      const legacyFile = path.join(projectRoot, adapter.legacyPath);
+      if (!fs.existsSync(legacyFile)) {
+        const legacyContent = adapter.formatLegacy(promptWithStack);
+        fs.writeFileSync(legacyFile, legacyContent, 'utf-8');
+        log.ok(`${adapter.legacyPath} 已创建（legacy 兼容）`);
+      } else {
+        log.warn(`${adapter.legacyPath} 已存在，跳过`);
+      }
+    }
   }
 
-  // 5.5 安装 sub-agent profile 到宿主专属目录（如宿主支持）
-  installAgentsForAdapter(adapter, srcRoot, projectRoot);
-
-  // 6. 生成提示词文件
-  const promptPath = path.join(projectRoot, adapter.promptPath);
-  const promptDir = path.dirname(promptPath);
-  if (!fs.existsSync(promptPath)) {
-    fs.mkdirSync(promptDir, { recursive: true });
-    const rawPrompt = renderPromptTemplate();
-    const formattedPrompt = adapter.formatPrompt(rawPrompt);
-    fs.writeFileSync(promptPath, formattedPrompt, 'utf-8');
-    log.ok(`${adapter.promptPath} 已创建`);
-  } else {
-    log.warn(`${adapter.promptPath} 已存在，跳过（update --force 覆盖）`);
-  }
-
-  // 7. 记录使用的工具
-  fs.writeFileSync(path.join(scDir, TOOL_STATE_FILE), adapter.name, 'utf-8');
+  // 7. 记录使用的工具（多工具用逗号分隔）
+  const toolState = targetAdapters.map(a => a.name).join(',');
+  fs.writeFileSync(path.join(scDir, TOOL_STATE_FILE), toolState, 'utf-8');
 
   // 8. Git hook
   installGitHook(projectRoot);
@@ -266,7 +321,8 @@ function cmdInstall(args) {
   log.title('安装完成');
   log.info('');
   log.info('接下来：');
-  if (adapter.hasNativeCommands) {
+  const hasNative = targetAdapters.some(a => a.hasNativeCommands);
+  if (hasNative) {
     log.info('  1. 执行 /spec:init（自动加载规范 + 扫描项目 + 报告状态）');
   } else {
     log.info('  1. 对 AI 说："读取 spec_copilot/ 目录下的规范，执行 /spec:init"');
@@ -276,6 +332,11 @@ function cmdInstall(args) {
   log.info('  4. 开始使用：/spec:propose <你的第一个需求>');
   log.info('');
   log.info('验证安装：npx @alenfitz/spec-copilot doctor');
+  if (targetAdapters.length > 1) {
+    log.info('');
+    log.info(`已安装 ${targetAdapters.length} 个工具适配: ${toolNames}`);
+    log.info('运行 spec-copilot sync 可随时同步所有适配器文件');
+  }
 }
 
 // ─── 升级 ───────────────────────────────────────────────────
@@ -2164,6 +2225,109 @@ function installGitHook(projectRoot) {
 
 // ─── 入口 ────────────────────────────────────────────────────
 
+// ─── Sync（适配器同步） ────────────────────────────────────
+
+function cmdSync(args) {
+  const projectRoot = findProjectRoot();
+  const srcRoot = pkgRoot();
+  const scDir = path.join(projectRoot, 'spec_copilot');
+  const force = args.includes('--force');
+
+  if (!fs.existsSync(scDir)) {
+    log.err('spec_copilot/ 不存在，请先执行 install');
+    process.exit(1);
+  }
+
+  // 读取已安装的工具列表
+  const stateFile = path.join(scDir, TOOL_STATE_FILE);
+  let toolNames = [];
+  if (fs.existsSync(stateFile)) {
+    toolNames = fs.readFileSync(stateFile, 'utf-8').trim().split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  // 如指定了 --tool，用指定的
+  const multi = resolveAdapters(args, projectRoot);
+  if (multi) {
+    toolNames = multi.map(a => a.name);
+  }
+
+  // 如果还是空，自动检测
+  if (toolNames.length === 0) {
+    const detected = detectTools(projectRoot);
+    toolNames = detected.map(a => a.name);
+  }
+
+  if (toolNames.length === 0) {
+    log.err('未检测到任何 AI 编码工具，请用 --tool 指定');
+    process.exit(1);
+  }
+
+  const targetAdapters = toolNames.map(n => adapters[n]).filter(Boolean);
+  log.title(`spec-copilot sync → ${targetAdapters.map(a => a.displayName).join(', ')}`);
+
+  // 检测技术栈
+  const stack = detectStack(projectRoot);
+  const stackCtx = buildStackContext(stack);
+
+  // 生成提示词
+  const rawPrompt = renderPromptTemplate();
+  const promptWithStack = stackCtx ? rawPrompt + '\n' + stackCtx : rawPrompt;
+
+  const commandsSrc = path.join(srcRoot, 'commands');
+  let synced = 0;
+
+  for (const adapter of targetAdapters) {
+    log.info('');
+    log.info(`─── 同步 ${adapter.displayName} ───`);
+
+    // 同步命令
+    if (adapter.hasNativeCommands && adapter.commandsDir) {
+      const cmdDest = path.join(projectRoot, adapter.commandsDir);
+      fs.mkdirSync(cmdDest, { recursive: true });
+      copyDir(commandsSrc, cmdDest);
+      log.ok(`${adapter.commandsDir}/ 已同步`);
+    }
+
+    // 同步 sub-agent
+    installAgentsForAdapter(adapter, srcRoot, projectRoot);
+
+    // 同步提示词
+    const promptPath = path.join(projectRoot, adapter.promptPath);
+    const promptDir = path.dirname(promptPath);
+    if (force || !fs.existsSync(promptPath)) {
+      fs.mkdirSync(promptDir, { recursive: true });
+      const formattedPrompt = adapter.formatPrompt(promptWithStack);
+      fs.writeFileSync(promptPath, formattedPrompt, 'utf-8');
+      log.ok(`${adapter.promptPath} 已${force ? '覆盖' : '创建'}`);
+      synced++;
+    } else {
+      log.warn(`${adapter.promptPath} 已存在，跳过（--force 覆盖）`);
+    }
+
+    // 同步 legacy 文件
+    if (adapter.legacyPath && adapter.formatLegacy) {
+      const legacyFile = path.join(projectRoot, adapter.legacyPath);
+      if (force || !fs.existsSync(legacyFile)) {
+        const legacyContent = adapter.formatLegacy(promptWithStack);
+        fs.writeFileSync(legacyFile, legacyContent, 'utf-8');
+        log.ok(`${adapter.legacyPath} 已${force ? '覆盖' : '创建'}`);
+        synced++;
+      } else {
+        log.warn(`${adapter.legacyPath} 已存在，跳过`);
+      }
+    }
+  }
+
+  // 更新工具状态
+  const newState = targetAdapters.map(a => a.name).join(',');
+  fs.writeFileSync(stateFile, newState, 'utf-8');
+
+  log.title(`同步完成（${synced} 个文件${force ? '已覆盖' : '已更新'}）`);
+  if (!force && synced === 0) {
+    log.info('所有文件已是最新，如需强制覆盖请用 --force');
+  }
+}
+
 // ─── CI ────────────────────────────────────────────────────
 
 function cmdCI(args) {
@@ -2200,6 +2364,7 @@ function showHelp() {
 用法:
   npx @alenfitz/spec-copilot install [--tool <name>]    初始化项目
   npx @alenfitz/spec-copilot update [--force]            升级框架
+  npx @alenfitz/spec-copilot sync [--tool <name>] [--force]  同步适配器文件
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
   npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
@@ -2209,9 +2374,15 @@ function showHelp() {
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 
+--tool 支持:
+  --tool cursor             单个工具
+  --tool cursor,copilot     多工具同时安装
+  --tool all                全部工具
+
 示例:
   npx @alenfitz/spec-copilot install --tool cursor
-  npx @alenfitz/spec-copilot install --tool claude-code
+  npx @alenfitz/spec-copilot install --tool all
+  npx @alenfitz/spec-copilot sync --force
   npx @alenfitz/spec-copilot gate user-login apply
   npx @alenfitz/spec-copilot doctor
 `);
@@ -2245,6 +2416,9 @@ switch (cmd) {
     break;
   case 'ci':
     cmdCI(args.slice(1));
+    break;
+  case 'sync':
+    cmdSync(args.slice(1));
     break;
   case 'doctor':
   case 'check':

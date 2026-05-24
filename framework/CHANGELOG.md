@@ -4,6 +4,17 @@
 
 ---
 
+## [3.1.0] - 2026-05-24
+
+### 新增
+- **适配器增强 — 多工具同时安装**: `--tool all` 或 `--tool cursor,copilot` 一次安装多个工具的适配文件
+- **Legacy 格式兼容**: 安装时同时生成 `.cursorrules` / `.windsurfrules` 根目录文件，兼容旧版工具
+- **项目技术栈自动检测**: 安装/同步时自动识别前端框架（Vue/React/Angular/Svelte）、后端（Spring Boot/Express/Django/Go）、构建工具、UI 库等，注入到提示词中
+- **`sync` 命令**: `spec-copilot sync [--force]` 同步所有已安装工具的适配器文件，规范变化后一键更新
+- **多工具状态记录**: 工具状态文件支持逗号分隔多工具名，Doctor 命令可检测全部已安装适配
+
+---
+
 ## [3.0.0] - 2026-05-24
 
 ### 新增

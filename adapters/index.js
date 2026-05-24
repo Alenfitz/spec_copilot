@@ -194,6 +194,7 @@ const adapters = {
     displayName: 'Cursor',
     description: 'Cursor IDE (.cursor/rules/*.mdc)',
     promptPath: '.cursor/rules/spec-copilot.mdc',
+    legacyPath: '.cursorrules',           // 根目录 legacy 文件
     commandsDir: null, // commands go to spec_copilot/commands/
     hasNativeCommands: false,
 
@@ -213,11 +214,15 @@ const adapters = {
       return frontmatter + content + buildCommandRoutingSection();
     },
 
+    formatLegacy(content) {
+      return content + buildCommandRoutingSection();
+    },
+
     formatCommand(content, _meta) {
       return content; // stored in spec_copilot/commands/, not tool-specific
     },
 
-    cleanupPaths: ['.cursor/rules/spec-copilot.mdc'],
+    cleanupPaths: ['.cursor/rules/spec-copilot.mdc', '.cursorrules'],
   },
 
   // ─── Windsurf ────────────────────────────────────────────
@@ -226,6 +231,7 @@ const adapters = {
     displayName: 'Windsurf',
     description: 'Windsurf IDE (.windsurf/rules/)',
     promptPath: '.windsurf/rules/spec-copilot.md',
+    legacyPath: '.windsurfrules',          // 根目录 legacy 文件
     commandsDir: null,
     hasNativeCommands: false,
 
@@ -238,11 +244,15 @@ const adapters = {
       return content + buildCommandRoutingSection();
     },
 
+    formatLegacy(content) {
+      return content + buildCommandRoutingSection();
+    },
+
     formatCommand(content, _meta) {
       return content;
     },
 
-    cleanupPaths: ['.windsurf/rules/spec-copilot.md'],
+    cleanupPaths: ['.windsurf/rules/spec-copilot.md', '.windsurfrules'],
   },
 
   // ─── GitHub Copilot ──────────────────────────────────────
@@ -306,4 +316,111 @@ function supportedTools() {
   return Object.keys(adapters);
 }
 
-module.exports = { adapters, detectTools, supportedTools, buildCommandRoutingSection, stripFrontmatter, parseAgentMeta };
+/**
+ * 自动检测项目技术栈，返回结构化信息
+ * 用于在生成提示词时注入项目特定上下文
+ */
+function detectStack(projectRoot) {
+  const stack = { frontend: null, backend: null, language: [], buildTool: null, packageManager: null, db: null, extras: [] };
+
+  // ─── 前端检测 ───
+  const pkgPath = path.join(projectRoot, 'package.json');
+  let pkg = null;
+  if (fs.existsSync(pkgPath)) {
+    try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')); } catch {}
+  }
+  // 可能在子目录
+  if (!pkg) {
+    for (const sub of ['frontend', 'web', 'client', 'app']) {
+      const p = path.join(projectRoot, sub, 'package.json');
+      if (fs.existsSync(p)) {
+        try { pkg = JSON.parse(fs.readFileSync(p, 'utf-8')); } catch {}
+        if (pkg) break;
+      }
+    }
+  }
+  if (pkg) {
+    const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (allDeps.vue || allDeps['@vue/cli-service'] || allDeps.nuxt) {
+      stack.frontend = allDeps.nuxt ? 'Nuxt' : (allDeps.vue && allDeps.vue.startsWith('^3') ? 'Vue 3' : 'Vue');
+    } else if (allDeps.react || allDeps['react-dom'] || allDeps.next) {
+      stack.frontend = allDeps.next ? 'Next.js' : 'React';
+    } else if (allDeps['@angular/core']) {
+      stack.frontend = 'Angular';
+    } else if (allDeps.svelte || allDeps['@sveltejs/kit']) {
+      stack.frontend = 'Svelte';
+    }
+    if (allDeps.typescript) stack.language.push('TypeScript');
+    if (allDeps.tailwindcss) stack.extras.push('Tailwind CSS');
+    if (allDeps['element-plus'] || allDeps['element-ui']) stack.extras.push('Element UI');
+    if (allDeps['ant-design-vue'] || allDeps.antd) stack.extras.push('Ant Design');
+    if (allDeps.vite) stack.buildTool = 'Vite';
+    else if (allDeps.webpack) stack.buildTool = 'webpack';
+    // package manager
+    if (fs.existsSync(path.join(projectRoot, 'pnpm-lock.yaml'))) stack.packageManager = 'pnpm';
+    else if (fs.existsSync(path.join(projectRoot, 'yarn.lock'))) stack.packageManager = 'yarn';
+    else stack.packageManager = 'npm';
+  }
+
+  // ─── 后端检测 ───
+  const pomPaths = [path.join(projectRoot, 'pom.xml'), path.join(projectRoot, 'backend', 'pom.xml'), path.join(projectRoot, 'server', 'pom.xml')];
+  const gradlePaths = [path.join(projectRoot, 'build.gradle'), path.join(projectRoot, 'build.gradle.kts'), path.join(projectRoot, 'backend', 'build.gradle')];
+  if (pomPaths.some(p => fs.existsSync(p))) {
+    stack.backend = 'Spring Boot';
+    stack.language.push('Java');
+  } else if (gradlePaths.some(p => fs.existsSync(p))) {
+    stack.backend = 'Spring Boot (Gradle)';
+    if (!stack.language.includes('Java')) stack.language.push('Java');
+  } else if (fs.existsSync(path.join(projectRoot, 'go.mod'))) {
+    stack.backend = 'Go';
+    stack.language.push('Go');
+  } else if (fs.existsSync(path.join(projectRoot, 'requirements.txt')) || fs.existsSync(path.join(projectRoot, 'pyproject.toml'))) {
+    stack.backend = 'Python';
+    stack.language.push('Python');
+    if (fs.existsSync(path.join(projectRoot, 'manage.py'))) stack.backend = 'Django';
+  } else if (pkg && !stack.frontend) {
+    // Node.js backend (Express, Nest, etc.)
+    const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (allDeps.express) { stack.backend = 'Express'; stack.language.push('Node.js'); }
+    else if (allDeps['@nestjs/core']) { stack.backend = 'NestJS'; stack.language.push('Node.js'); }
+  }
+
+  // ─── 数据库检测 ───
+  if (pkg) {
+    const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (allDeps.mysql2 || allDeps.mysql) stack.db = 'MySQL';
+    else if (allDeps.pg) stack.db = 'PostgreSQL';
+    else if (allDeps.mongodb || allDeps.mongoose) stack.db = 'MongoDB';
+  }
+
+  // 去重 language
+  stack.language = [...new Set(stack.language)];
+  return stack;
+}
+
+/**
+ * 根据检测到的技术栈生成项目上下文摘要
+ * 注入到适配器生成的提示词中
+ */
+function buildStackContext(stack) {
+  const parts = [];
+  if (stack.frontend) parts.push(`前端: ${stack.frontend}`);
+  if (stack.backend) parts.push(`后端: ${stack.backend}`);
+  if (stack.language.length > 0) parts.push(`语言: ${stack.language.join(', ')}`);
+  if (stack.buildTool) parts.push(`构建: ${stack.buildTool}`);
+  if (stack.packageManager) parts.push(`包管理: ${stack.packageManager}`);
+  if (stack.db) parts.push(`数据库: ${stack.db}`);
+  if (stack.extras.length > 0) parts.push(`UI/CSS: ${stack.extras.join(', ')}`);
+
+  if (parts.length === 0) return '';
+
+  return `
+## 项目技术栈（自动检测）
+
+${parts.map(p => `- ${p}`).join('\n')}
+
+> 以上技术栈由 spec-copilot 自动检测，请结合项目实际情况编码。
+`;
+}
+
+module.exports = { adapters, detectTools, supportedTools, buildCommandRoutingSection, stripFrontmatter, parseAgentMeta, detectStack, buildStackContext };
