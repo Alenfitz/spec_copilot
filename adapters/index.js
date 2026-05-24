@@ -99,18 +99,18 @@ function buildCommandRoutingSection() {
 
 | 命令 | 读取文件 |
 |------|---------|
-| \`/spec:init\` | \`spec_copilot/commands/spec:init.md\` |
-| \`/spec:bootstrap\` | \`spec_copilot/commands/spec:bootstrap.md\` |
-| \`/spec:propose <需求>\` | \`spec_copilot/commands/spec:propose.md\` |
-| \`/spec:lite <需求>\` | \`spec_copilot/commands/spec:lite.md\` |
-| \`/spec:flow <需求>\` | \`spec_copilot/commands/spec:flow.md\` |
-| \`/spec:apply <变更名>\` | \`spec_copilot/commands/spec:apply.md\` |
-| \`/spec:smoke <变更名>\` | \`spec_copilot/commands/spec:smoke.md\` |
-| \`/spec:review <变更名>\` | \`spec_copilot/commands/spec:review.md\` |
-| \`/spec:fix <变更名>\` | \`spec_copilot/commands/spec:fix.md\` |
-| \`/spec:test <变更名>\` | \`spec_copilot/commands/spec:test.md\` |
-| \`/spec:archive <变更名>\` | \`spec_copilot/commands/spec:archive.md\` |
-| \`/spec:hotfix <描述>\` | \`spec_copilot/commands/spec:hotfix.md\` |
+| \`/spec:init\` | \`spec_copilot/commands/spec/init.md\` |
+| \`/spec:bootstrap\` | \`spec_copilot/commands/spec/bootstrap.md\` |
+| \`/spec:propose <需求>\` | \`spec_copilot/commands/spec/propose.md\` |
+| \`/spec:lite <需求>\` | \`spec_copilot/commands/spec/lite.md\` |
+| \`/spec:flow <需求>\` | \`spec_copilot/commands/spec/flow.md\` |
+| \`/spec:apply <变更名>\` | \`spec_copilot/commands/spec/apply.md\` |
+| \`/spec:smoke <变更名>\` | \`spec_copilot/commands/spec/smoke.md\` |
+| \`/spec:review <变更名>\` | \`spec_copilot/commands/spec/review.md\` |
+| \`/spec:fix <变更名>\` | \`spec_copilot/commands/spec/fix.md\` |
+| \`/spec:test <变更名>\` | \`spec_copilot/commands/spec/test.md\` |
+| \`/spec:archive <变更名>\` | \`spec_copilot/commands/spec/archive.md\` |
+| \`/spec:hotfix <描述>\` | \`spec_copilot/commands/spec/hotfix.md\` |
 
 用户输入命令后，**立即**读取对应文件并执行，不需要再次确认。
 将 \`<需求>\`、\`<变更名>\`、\`<描述>\` 替换为用户在命令后提供的参数。

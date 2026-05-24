@@ -40,6 +40,26 @@
 - **幂等规则判断增强**: smoke 现在能区分“前端防重导致第二次请求未发出”和“后端实际收到重复请求”，让前后端交互问题更容易定位
 - **文档约束补齐**: 模板与 README 提示 AC 场景可显式描述重复提交，以便更稳定地观测幂等行为
 
+## [4.0.3] - 2026-05-24
+
+### 修复（重要 — Windows 兼容性）
+
+**Windows 用户之前无法安装这个包**：`commands/spec:*.md` 文件名含冒号，Windows 文件系统不允许（`:` 是保留字符）。npm 解压 tarball 时在 Windows 上会失败。
+
+- **命令文件迁移到目录式命名**：`commands/spec:foo.md` → `commands/spec/foo.md`
+  - Claude Code 和 opencode 都原生支持目录式 namespace（`spec/foo.md` 自动注册为 `/spec:foo` 命令）
+  - 跨平台兼容（Windows / macOS / Linux 均可）
+- **adapters/index.js 命令路由表更新**：所有 prompt-routing 工具（Cursor / Windsurf / Copilot / Cline）的路由表同步更新
+- **cli.js 计数逻辑递归化**：commands 现在是嵌套目录，cmdCount 改用递归计算
+- **CI 重新启用 windows-latest**：matrix 现在覆盖 Ubuntu / macOS / Windows × Node 18/20/22
+
+### 用户影响
+
+- **重装**：建议运行 `npx @alenfitz/spec-copilot update --force` 重装命令文件
+- **斜杠命令不变**：`/spec:lite`、`/spec:propose` 等命令使用方式完全一样
+
+---
+
 ## [4.0.2] - 2026-05-24
 
 ### 测试

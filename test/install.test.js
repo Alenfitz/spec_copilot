@@ -79,14 +79,14 @@ test('install: 模板文件正确拷贝（spec.md / tasks.md / log.md）', () =>
   }
 });
 
-test('install: commands 中包含 spec:lite（v4.0+）', () => {
+test('install: commands 中包含 spec/lite（v4.0.3+ 目录式命名）', () => {
   const dir = mkTmp();
   try {
     runIn(dir, 'install --tool claude-code');
-    const cmdFile = path.join(dir, '.claude', 'commands', 'spec:lite.md');
-    assert.ok(fs.existsSync(cmdFile), 'spec:lite.md 应已安装');
+    const cmdFile = path.join(dir, '.claude', 'commands', 'spec', 'lite.md');
+    assert.ok(fs.existsSync(cmdFile), 'commands/spec/lite.md 应已安装');
     const content = fs.readFileSync(cmdFile, 'utf-8');
-    assert.ok(content.includes('轻量需求'), 'spec:lite 内容应正确');
+    assert.ok(content.includes('轻量需求'), 'spec/lite 内容应正确');
   } finally {
     cleanup(dir);
   }

@@ -355,14 +355,25 @@ function cmdInstall(args) {
     log.info(`─── 安装 ${adapter.displayName} 适配 ───`);
 
     // 6a. 原生命令目录
+    // commands 现在用目录式命名（v4.0.3+）：commands/spec/<name>.md → /spec:<name>
+    // 计数：递归找所有 .md 文件
+    const countMdFiles = (dir) => {
+      let n = 0;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory()) n += countMdFiles(path.join(dir, entry.name));
+        else if (entry.name.endsWith('.md')) n += 1;
+      }
+      return n;
+    };
+
     if (adapter.hasNativeCommands && adapter.commandsDir) {
       const cmdDest = path.join(projectRoot, adapter.commandsDir);
       fs.mkdirSync(cmdDest, { recursive: true });
       copyDir(commandsSrc, cmdDest);
-      const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
+      const cmdCount = countMdFiles(commandsSrc);
       log.ok(`${adapter.commandsDir}/ 已安装（${cmdCount} 个斜杠命令）`);
     } else {
-      const cmdCount = fs.readdirSync(commandsSrc).filter(f => f.endsWith('.md')).length;
+      const cmdCount = countMdFiles(commandsSrc);
       log.ok(`spec_copilot/commands/ 已安装（${cmdCount} 个命令，通过 prompt 路由）`);
     }
 
