@@ -788,6 +788,9 @@ async function cmdGate(args) {
             if (e2eResult.ruleRuntimeSummary && e2eResult.ruleRuntimeSummary.total > 0) {
               const rr = e2eResult.ruleRuntimeSummary;
               log.ok(`  RULE-CHECK 运行时证据: ${rr.covered}/${rr.total} 完整闭环${rr.partial ? ` / ${rr.partial} 部分闭环` : ''}${rr.missing ? ` / ${rr.missing} 未闭环` : ''}`);
+              for (const item of (rr.rules || []).filter(r => r.status !== 'covered').slice(0, 4)) {
+                log.warn(`  ${item.id}(${item.kind}): ${item.missing.length ? `缺少 ${item.missing.join('、')}` : `提示 ${item.warnings.join('、')}`}`);
+              }
               for (const w of rr.warnings.slice(0, 6)) {
                 log.warn(`  ${w}`);
               }

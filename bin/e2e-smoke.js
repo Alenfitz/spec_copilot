@@ -454,6 +454,10 @@ function extractRuleCheckBlocks(specContent) {
       to: get('to'),
       key: get('key'),
       repeat: get('repeat'),
+      finalState: get('final_state') || get('to'),
+      secondRequest: get('second_request'),
+      duplicateStatus: get('duplicate_status'),
+      duplicateMessage: get('duplicate_message'),
       left: get('left'),
       op: get('op'),
       right: get('right'),
@@ -564,6 +568,9 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
     ...pageResults.flatMap(p => [...(p.failures || []), ...(p.warnings || [])]),
     ...interactionResults.flatMap(r => [...(r.failures || []), ...(r.warnings || [])]),
   ];
+  const interactionTexts = interactionResults.flatMap(r =>
+    (r.interactions || []).flatMap(i => [i.pageTextAfterSubmit, i.pageTextAfterSecondSubmit].filter(Boolean))
+  );
   const fieldAwareKinds = new Set(['required', 'enum', 'compare_datetime']);
   const transitionKinds = new Set(['state_transition']);
   const idempotentKinds = new Set(['idempotent']);
@@ -612,10 +619,17 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
       const hasTargetState = observedCalls.some(call =>
         (rule.to && ((call.requestBody || '').includes(rule.to) || (call.responsePreview || '').includes(rule.to)))
       );
+      const hasFinalStateEvidence = observedCalls.some(call =>
+        (rule.finalState && ((call.responsePreview || '').includes(rule.finalState) || (call.responseMessage || '').includes(rule.finalState)))
+      ) || interactionTexts.some(text => rule.finalState && text.includes(rule.finalState));
       if (hasField) evidence.push('运行时请求包含状态字段');
       else missing.push('运行时请求缺少状态字段');
       if (hasTargetState) evidence.push('运行时命中目标状态');
       else warnings.push('未观察到目标状态证据');
+      if (rule.finalState) {
+        if (hasFinalStateEvidence) evidence.push('观察到最终状态回显');
+        else if (expectedSuccess === true) warnings.push('未观察到最终状态回显');
+      }
       if (rule.from) {
         const hasSourceState = observedCalls.some(call =>
           (call.requestBody || '').includes(rule.from) || (call.responsePreview || '').includes(rule.from)
@@ -636,6 +650,8 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
       }
 
       const repeatCount = /^\d+$/.test(rule.repeat || '') ? Number(rule.repeat) : 2;
+      const duplicateStatus = /^\d+$/.test(rule.duplicateStatus || '') ? Number(rule.duplicateStatus) : null;
+      const secondRequestMode = /^(blocked|accepted|either)$/i.test(rule.secondRequest || '') ? rule.secondRequest.toLowerCase() : 'either';
       const submitEvidence = formSubmitInteractions.filter(i =>
         (i.apiCalls || []).some(call =>
           apiRow &&
@@ -643,6 +659,7 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
           normalizeApiPath(call.path || '') === normalizeApiPath(apiRow.path)
         )
       );
+      const secondSubmitCalls = submitEvidence.flatMap(i => i.secondSubmitCalls || []);
       if (observedCalls.length >= repeatCount) {
         evidence.push(`观察到重复请求(${observedCalls.length}次)`);
         const successCount = observedCalls.filter(call => call.status >= 200 && call.status < 400).length;
@@ -665,6 +682,25 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
       }
       if (submitEvidence.some(i => i.secondSubmitTriggered)) {
         evidence.push('运行时触发了第二次提交');
+      }
+      if (secondRequestMode === 'blocked' && submitEvidence.some(i => i.secondSubmitTriggered)) {
+        missing.push('期望前端拦截第二次提交，但仍发出了重复请求');
+      }
+      if (secondRequestMode === 'accepted' && submitEvidence.some(i => i.secondSubmitAttempted) && !submitEvidence.some(i => i.secondSubmitTriggered)) {
+        missing.push('期望第二次请求到达后端，但前端已拦截');
+      }
+      if (duplicateStatus !== null && secondSubmitCalls.length > 0) {
+        const statusMatched = secondSubmitCalls.some(call => call.status === duplicateStatus);
+        if (statusMatched) evidence.push(`第二次提交命中状态码 ${duplicateStatus}`);
+        else missing.push(`第二次提交未命中预期状态码 ${duplicateStatus}`);
+      }
+      if (rule.duplicateMessage) {
+        const duplicateMessageHit = secondSubmitCalls.some(call =>
+          (call.responseMessage || '').includes(rule.duplicateMessage) ||
+          (call.responsePreview || '').includes(rule.duplicateMessage)
+        ) || interactionTexts.some(text => text.includes(rule.duplicateMessage)) || uiMessages.some(msg => msg.includes(rule.duplicateMessage));
+        if (duplicateMessageHit) evidence.push('第二次提交命中幂等文案');
+        else if (submitEvidence.some(i => i.secondSubmitAttempted)) warnings.push('未观察到幂等文案');
       }
     }
 
@@ -2080,7 +2116,11 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
                   secondSubmitAttempted,
                   secondSubmitTriggered,
                   secondSubmitCalls,
+                  pageTextAfterSubmit: await page.evaluate(() => (document.body.innerText || '').slice(0, 600)),
                 };
+                if (secondSubmitAttempted) {
+                  interaction.pageTextAfterSecondSubmit = await page.evaluate(() => (document.body.innerText || '').slice(0, 600));
+                }
                 result.interactions.push(interaction);
 
                 if (!interaction.apiTriggered) {

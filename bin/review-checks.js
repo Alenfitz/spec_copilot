@@ -151,6 +151,10 @@ function extractRuleCheckBlocks(specContent) {
       to: get('to'),
       key: get('key'),
       repeat: get('repeat'),
+      finalState: get('final_state') || get('to'),
+      secondRequest: get('second_request'),
+      duplicateStatus: get('duplicate_status'),
+      duplicateMessage: get('duplicate_message'),
       left: get('left'),
       op: get('op'),
       right: get('right'),
@@ -827,6 +831,12 @@ function checkRuleCoverage(projectRoot, specContent) {
       if (dsl.kind === 'idempotent' && dsl.repeat && !/^\d+$/.test(dsl.repeat)) {
         missing.push('RULE-CHECK.idempotent repeat 非法');
       }
+      if (dsl.kind === 'idempotent' && dsl.secondRequest && !/^(blocked|accepted|either)$/i.test(dsl.secondRequest)) {
+        missing.push('RULE-CHECK.idempotent second_request 非法');
+      }
+      if (dsl.kind === 'idempotent' && dsl.duplicateStatus && !/^\d+$/.test(dsl.duplicateStatus)) {
+        missing.push('RULE-CHECK.idempotent duplicate_status 非法');
+      }
       if (dsl.kind === 'required') {
         const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.left);
         if (!fieldFoundInChecklist) {
@@ -849,6 +859,9 @@ function checkRuleCoverage(projectRoot, specContent) {
         const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.field, true);
         if (!fieldFoundInChecklist) {
           missing.push('RULE-CHECK.state_transition 字段未出现在 API 字段清单');
+        }
+        if (dsl.finalState && !fieldFoundInChecklist) {
+          missing.push('RULE-CHECK.state_transition final_state 缺少状态字段支撑');
         }
       }
       if (dsl.kind === 'idempotent') {

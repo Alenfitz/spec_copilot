@@ -180,6 +180,7 @@ spec 模板现在支持一个轻量的 `RULE-CHECK` YAML 片段来描述 `Vxx` �
 - `smoke/e2e` 现在也会尝试收集 `RULE-CHECK` 的运行时证据；如果 AC 场景真实触发了绑定 API，但请求字段或错误文案和 spec 对不上，gate 会直接暴露出来
 - `state_transition` 和 `idempotent` 也开始有运行时证据能力，推荐分别写清 `field/from/to` 与 `key/repeat`
 - 对 `idempotent` 来说，如果 AC 场景能明确描述“重复提交”，smoke 现在还能进一步区分是前端防重拦住了第二次，还是后端真的收到了重复请求
+- 如果你要拿真实业务场景验证，推荐把 `final_state`、`second_request`、`duplicate_status`、`duplicate_message` 也写进 DSL，这样 gate 输出会更接近业务验收语言
 
 ### Guard 代码级护栏（v2.6.0）
 

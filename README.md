@@ -179,6 +179,7 @@ The spec template now supports a small `RULE-CHECK` YAML block for `Vxx` rules.
 - `smoke/e2e` now also tries to collect runtime evidence for `RULE-CHECK`; when an AC scenario really hits the bound API but the request fields or error message drift from the spec, the gate will surface it directly
 - `state_transition` and `idempotent` now also have first-pass runtime evidence support; prefer declaring `field/from/to` and `key/repeat` explicitly
 - for `idempotent`, if the AC scenario explicitly describes repeat submission, smoke can now better distinguish frontend anti-double-submit behavior from actual duplicate requests reaching the backend
+- for real business validation, prefer adding `final_state`, `second_request`, `duplicate_status`, and `duplicate_message` so the gate output is closer to business acceptance language
 
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 
