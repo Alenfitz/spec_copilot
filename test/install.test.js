@@ -92,7 +92,9 @@ test('install: commands 中包含 spec/lite（v4.0.3+ 目录式命名）', () =>
   }
 });
 
-test('update --force: 清理 v4.0.3 前的 spec:xxx 旧命令文件', () => {
+test('update --force: 清理 v4.0.3 前的 spec:xxx 旧命令文件', {
+  skip: process.platform === 'win32' ? 'Windows 文件系统不能创建 legacy spec:xxx.md 测试夹具' : false,
+}, () => {
   const dir = mkTmp();
   try {
     runIn(dir, 'install --tool claude-code');
