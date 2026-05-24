@@ -95,6 +95,7 @@ RULE-CHECK:
 > 5. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到，并能落到绑定接口的前端调用方 / 后端实现入口。
 > 6. 如果希望 `smoke/e2e` 也消费这条规则，应尽量让对应 AC 场景真实触发该 `api: APIxx`，这样 gate 才能收集运行时证据。
 > 7. `state_transition` 建议声明 `field/from/to`；`idempotent` 建议声明 `key/repeat`，这样 review/smoke 才能检查状态迁移和重复请求证据。
+> 8. `idempotent` 场景建议在 AC 中明确“连续点击提交/保存”或“重复提交”，这样 smoke 才更容易观察到第二次请求或前端防重行为。
 
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |

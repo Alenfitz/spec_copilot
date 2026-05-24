@@ -179,6 +179,7 @@ spec 模板现在支持一个轻量的 `RULE-CHECK` YAML 片段来描述 `Vxx` �
 - 字段型规则现在还建议绑定 `api: APIxx`，让 gate 继续检查这些字段有没有真正落到前端调用方和后端实现入口
 - `smoke/e2e` 现在也会尝试收集 `RULE-CHECK` 的运行时证据；如果 AC 场景真实触发了绑定 API，但请求字段或错误文案和 spec 对不上，gate 会直接暴露出来
 - `state_transition` 和 `idempotent` 也开始有运行时证据能力，推荐分别写清 `field/from/to` 与 `key/repeat`
+- 对 `idempotent` 来说，如果 AC 场景能明确描述“重复提交”，smoke 现在还能进一步区分是前端防重拦住了第二次，还是后端真的收到了重复请求
 
 ### Guard 代码级护栏（v2.6.0）
 

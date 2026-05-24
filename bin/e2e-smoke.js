@@ -531,6 +531,13 @@ async function buildApiInteractionSnapshot(res) {
   };
 }
 
+function sameRuntimeCall(a, b) {
+  if (!a || !b) return false;
+  return a.method === b.method &&
+    normalizeApiPath(a.path || '') === normalizeApiPath(b.path || '') &&
+    (a.requestBody || '') === (b.requestBody || '');
+}
+
 function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResults) {
   const ruleBlocks = extractRuleCheckBlocks(specContent).filter(block => block.id);
   if (ruleBlocks.length === 0) {
@@ -550,6 +557,9 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
     ...pageResults.flatMap(p => p.apiInteractions || []),
     ...interactionResults.flatMap(r => (r.interactions || []).flatMap(i => i.apiCalls || [])),
   ];
+  const formSubmitInteractions = interactionResults.flatMap(r =>
+    (r.interactions || []).filter(i => i.type === '表单提交')
+  );
   const uiMessages = [
     ...pageResults.flatMap(p => [...(p.failures || []), ...(p.warnings || [])]),
     ...interactionResults.flatMap(r => [...(r.failures || []), ...(r.warnings || [])]),
@@ -626,14 +636,35 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
       }
 
       const repeatCount = /^\d+$/.test(rule.repeat || '') ? Number(rule.repeat) : 2;
+      const submitEvidence = formSubmitInteractions.filter(i =>
+        (i.apiCalls || []).some(call =>
+          apiRow &&
+          call.method === apiRow.method &&
+          normalizeApiPath(call.path || '') === normalizeApiPath(apiRow.path)
+        )
+      );
       if (observedCalls.length >= repeatCount) {
         evidence.push(`观察到重复请求(${observedCalls.length}次)`);
         const successCount = observedCalls.filter(call => call.status >= 200 && call.status < 400).length;
         if (successCount === 0) {
           warnings.push('重复请求全部失败，暂无法判断幂等表现');
         }
+        const duplicatePayload = observedCalls.some((call, idx) =>
+          observedCalls.slice(idx + 1).some(other => sameRuntimeCall(call, other))
+        );
+        if (duplicatePayload) {
+          evidence.push('观察到相同负载重复提交');
+        } else {
+          warnings.push('重复请求负载不完全一致');
+        }
       } else {
         warnings.push(`未观察到足够的重复请求(${observedCalls.length}/${repeatCount})`);
+      }
+      if (submitEvidence.some(i => i.secondSubmitAttempted && !i.secondSubmitTriggered)) {
+        evidence.push('前端具备防重复提交迹象');
+      }
+      if (submitEvidence.some(i => i.secondSubmitTriggered)) {
+        evidence.push('运行时触发了第二次提交');
       }
     }
 
@@ -1983,6 +2014,58 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
 
                 const postPutCalls = formApiCalls.filter(a => a.method === 'POST' || a.method === 'PUT');
                 const errorCalls = formApiCalls.filter(a => a.status >= 400);
+                const successCalls = postPutCalls.filter(a => a.status >= 200 && a.status < 400);
+
+                let secondSubmitAttempted = false;
+                let secondSubmitTriggered = false;
+                let secondSubmitCalls = [];
+                if (successCalls.length > 0) {
+                  const canRetrySubmit = await page.evaluate((submitTexts) => {
+                    const containers = document.querySelectorAll(
+                      '.el-dialog:not([style*="display: none"]), .el-drawer:not([style*="display: none"]), ' +
+                      '.ant-modal:not([style*="display: none"]), .ant-drawer:not([style*="display: none"]), ' +
+                      '[role="dialog"]:not([style*="display: none"]), form, .el-form, .ant-form'
+                    );
+                    for (const container of containers) {
+                      if (!container || container.offsetParent === null) continue;
+                      const btns = container.querySelectorAll('button, .el-button, .ant-btn');
+                      for (const btn of btns) {
+                        const text = (btn.textContent || '').trim();
+                        if (submitTexts.some(t => text.includes(t)) && !btn.disabled) {
+                          return true;
+                        }
+                      }
+                    }
+                    return false;
+                  }, ['确定', '保存', '提交', '确认', 'OK', 'Save', 'Submit', 'Confirm']);
+
+                  if (canRetrySubmit) {
+                    secondSubmitAttempted = true;
+                    const beforeRetryCount = formApiCalls.length;
+                    await page.evaluate((submitTexts) => {
+                      const containers = document.querySelectorAll(
+                        '.el-dialog:not([style*="display: none"]), .el-drawer:not([style*="display: none"]), ' +
+                        '.ant-modal:not([style*="display: none"]), .ant-drawer:not([style*="display: none"]), ' +
+                        '[role="dialog"]:not([style*="display: none"]), form, .el-form, .ant-form'
+                      );
+                      for (const container of containers) {
+                        if (!container || container.offsetParent === null) continue;
+                        const btns = container.querySelectorAll('button, .el-button, .ant-btn');
+                        for (const btn of btns) {
+                          const text = (btn.textContent || '').trim();
+                          if (submitTexts.some(t => text.includes(t)) && !btn.disabled) {
+                            btn.click();
+                            return true;
+                          }
+                        }
+                      }
+                      return false;
+                    }, ['确定', '保存', '提交', '确认', 'OK', 'Save', 'Submit', 'Confirm']);
+                    await page.waitForTimeout(1800);
+                    secondSubmitCalls = formApiCalls.slice(beforeRetryCount).filter(a => a.method === 'POST' || a.method === 'PUT');
+                    secondSubmitTriggered = secondSubmitCalls.length > 0;
+                  }
+                }
 
                 const interaction = {
                   type: '表单提交',
@@ -1993,6 +2076,10 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
                   apiCount: postPutCalls.length,
                   apiErrors: errorCalls.map(a => `${a.status} ${a.method} ${a.url.split('?')[0].slice(0, 80)}`),
                   apiCalls: postPutCalls,
+                  successCount: successCalls.length,
+                  secondSubmitAttempted,
+                  secondSubmitTriggered,
+                  secondSubmitCalls,
                 };
                 result.interactions.push(interaction);
 
@@ -2006,6 +2093,8 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
                   } else {
                     result.warnings.push(`表单提交 API 返回 ${errorCalls[0].status}（可能是测试数据不符合业务校验规则）`);
                   }
+                } else if (secondSubmitAttempted && !secondSubmitTriggered) {
+                  result.warnings.push('表单首次成功后未观察到第二次提交请求（可能已做前端防重）');
                 }
               }
             } else {
