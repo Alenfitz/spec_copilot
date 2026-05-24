@@ -141,6 +141,7 @@ This turns “the UI looks complete but the API cannot actually be called” int
 
 - `happy` scenarios without end-to-end closure are treated as gate failures
 - `rule/error` scenarios show where validation or error-feedback evidence is still missing
+- multi-step scenarios are now checked step by step instead of only by coarse keyword coverage
 - The goal is to turn "spec has acceptance cases" into "gate can prove whether they were exercised"
 
 ### Fxx to ACxx Trace Gate

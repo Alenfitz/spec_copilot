@@ -604,9 +604,34 @@ function extractAcceptanceScenarios(specContent) {
   return scenarios;
 }
 
+function splitScenarioSteps(stepsText) {
+  return stepsText
+    .split(/\s*(?:→|->|=>|\/)\s*/g)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function inferStepRequirement(stepText) {
+  const text = stepText.trim();
+  return {
+    text,
+    kind:
+      /(打开|进入|访问|进入列表|进入详情|跳转|进入页面)/i.test(text) ? 'open' :
+      /(查询|搜索|筛选|检索|search|filter)/i.test(text) ? 'search' :
+      /(分页|下一页|上一页|翻页|page)/i.test(text) ? 'pagination' :
+      /(查看详情|详情|查看|detail)/i.test(text) ? 'detail' :
+      /(新增|新建|创建|录入|填写|编辑|提交|保存)/i.test(text) ? 'form' :
+      /(删除|作废|撤销|停用)/i.test(text) ? 'mutation' :
+      /(提示|校验|报错|失败|拦截|异常|文案)/i.test(text) ? 'feedback' :
+      'generic',
+  };
+}
+
 function inferScenarioSignals(scenario) {
   const text = `${scenario.steps} ${scenario.expected}`;
+  const parsedSteps = splitScenarioSteps(scenario.steps).map(inferStepRequirement);
   return {
+    parsedSteps,
     needsSearch: /(查询|搜索|筛选|search|filter)/i.test(text),
     needsPagination: /(分页|下一页|上一页|page\s*\d|第\s*\d+\s*页)/i.test(text),
     needsFormSubmit: /(新增|新建|创建|录入|提交|保存|编辑)/i.test(text),
@@ -650,11 +675,13 @@ function summarizeAcceptanceCoverage(scenarios, pageResults, apiResults, interac
     allInteractions.some(i => i.type === '搜索' || i.type === '分页') ||
     lowerRoutes.some(route => /list|index|manage|table|query|search/.test(route)) ||
     pagePassCount > 0;
+  const hasMutationEvidence = allInteractions.some(i => i.type === '表单提交' && i.apiTriggered);
 
   const details = scenarios.map((scenario) => {
     const signals = inferScenarioSignals(scenario);
     const evidence = [];
     const missing = [];
+    const stepMatches = [];
 
     if (pagePassCount > 0) evidence.push('页面可访问');
     else missing.push('页面访问证据');
@@ -688,16 +715,80 @@ function summarizeAcceptanceCoverage(scenarios, pageResults, apiResults, interac
       else missing.push('异常/校验反馈');
     }
 
+    for (const step of signals.parsedSteps) {
+      let matched = false;
+      let matchedBy = '';
+      switch (step.kind) {
+        case 'open':
+          matched = pagePassCount > 0;
+          matchedBy = matched ? '页面可访问' : '';
+          break;
+        case 'search':
+          matched = hasSearchEvidence;
+          matchedBy = matched ? '搜索交互' : '';
+          break;
+        case 'pagination':
+          matched = hasPaginationEvidence;
+          matchedBy = matched ? '分页交互' : '';
+          break;
+        case 'detail':
+          matched = hasDetailEvidence;
+          matchedBy = matched ? '详情/行操作' : '';
+          break;
+        case 'form':
+          matched = hasFormSubmitEvidence || hasCreateEvidence;
+          matchedBy = hasFormSubmitEvidence ? '表单提交' : (hasCreateEvidence ? '新增入口存在' : '');
+          break;
+        case 'mutation':
+          matched = hasMutationEvidence;
+          matchedBy = matched ? '表单提交' : '';
+          break;
+        case 'feedback':
+          matched = negativeEvidence;
+          matchedBy = matched ? '异常/校验反馈' : '';
+          break;
+        default:
+          matched = apiHealthy || pagePassCount > 0;
+          matchedBy = matched ? '页面/API 基础证据' : '';
+          break;
+      }
+      stepMatches.push({
+        step: step.text,
+        kind: step.kind,
+        matched,
+        matchedBy,
+      });
+    }
+
+    const matchedStepCount = stepMatches.filter(s => s.matched).length;
+    const totalStepCount = stepMatches.length;
+    const stepCoverage = totalStepCount > 0 ? matchedStepCount / totalStepCount : (evidence.length > 0 ? 1 : 0);
+    if (totalStepCount > 0 && matchedStepCount === 0) {
+      missing.push('步骤级执行证据');
+    } else if (totalStepCount > 0 && matchedStepCount < totalStepCount) {
+      missing.push(`步骤覆盖不足(${matchedStepCount}/${totalStepCount})`);
+    }
+
     let status = 'covered';
     if (missing.length === 0 && evidence.length === 0) status = 'missing';
     else if (missing.length > 0 && evidence.length > 0) status = 'partial';
     else if (missing.length > 0) status = 'missing';
+    if (status === 'covered' && totalStepCount > 0 && stepCoverage < 1) {
+      status = 'partial';
+    }
+    if (scenario.type === 'happy' && totalStepCount >= 2 && stepCoverage < 0.6) {
+      status = 'missing';
+    }
 
     return {
       ...scenario,
       status,
       evidence,
       missing,
+      stepMatches,
+      matchedStepCount,
+      totalStepCount,
+      stepCoverage,
     };
   });
 
@@ -721,6 +812,10 @@ function summarizeAcceptanceCoverage(scenarios, pageResults, apiResults, interac
   }
   if (happyStats.total > 0 && happyStats.covered === 0) {
     failures.push(`happy 场景 0/${happyStats.total} 完整覆盖，核心主流程仍缺少可验证闭环`);
+  }
+  const weakHappy = details.filter(s => s.type === 'happy' && s.totalStepCount >= 2 && s.stepCoverage < 0.6);
+  if (weakHappy.length > 0) {
+    failures.push(`happy 场景步骤覆盖不足: ${weakHappy.slice(0, 5).map(s => `${s.id}(${s.matchedStepCount}/${s.totalStepCount})`).join(', ')}`);
   }
   if (missing > 0 && failures.length === 0) {
     warnings.push(`${missing} 个 AC 场景仍未覆盖：${details.filter(s => s.status === 'missing').slice(0, 5).map(s => s.id).join(', ')}`);

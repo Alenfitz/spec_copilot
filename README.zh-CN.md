@@ -142,6 +142,7 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 
 - `happy` 主流程场景没有形成端到端闭环时，会直接阻断 gate
 - `rule/error` 场景会暴露缺失的校验反馈或异常路径证据
+- 多步骤场景现在会按步骤逐项判定，而不只是做粗粒度关键词覆盖
 - 目的就是把“spec 写了验收”推进成“gate 真能证明有没有跑到”
 
 ### Fxx 到 ACxx 追踪门禁

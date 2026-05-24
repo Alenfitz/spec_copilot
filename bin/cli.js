@@ -779,6 +779,11 @@ async function cmdGate(args) {
               for (const w of ac.warnings || []) {
                 log.warn(`  ${w}`);
               }
+              for (const s of (ac.scenarios || []).filter(item => item.status !== 'covered').slice(0, 4)) {
+                if (s.totalStepCount > 0) {
+                  log.warn(`  ${s.id}: 步骤覆盖 ${s.matchedStepCount}/${s.totalStepCount}，缺少 ${s.missing.join('、')}`);
+                }
+              }
             }
             // v3.0.0: 显示 API Schema 校验结果
             if (e2eResult.schemaViolations && e2eResult.schemaViolations.length > 0) {
@@ -827,7 +832,8 @@ async function cmdGate(args) {
                 details.push(`AC Gate: ${f}`);
               }
               for (const s of (ac.scenarios || []).filter(item => item.status !== 'covered').slice(0, 6)) {
-                details.push(`${s.id}(${s.type}): 缺少 ${s.missing.join('、')}`);
+                const stepPart = s.totalStepCount > 0 ? ` / 步骤 ${s.matchedStepCount}/${s.totalStepCount}` : '';
+                details.push(`${s.id}(${s.type}${stepPart}): 缺少 ${s.missing.join('、')}`);
               }
             }
             fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`);
