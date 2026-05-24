@@ -4,6 +4,8 @@
 
 [中文文档](https://github.com/Alenfitz/spec_copilot/blob/main/README.zh-CN.md)
 
+> **v4.0 (Breaking Change)** — A deliberate subtraction. Simpler spec template (-63% lines), fewer required fields (9 → 4), new `/spec:lite` path for light requirements, three stack adapters (Vue+Spring Boot, React+Express, Next.js), and the framework now has its own tests (37 cases, CI on Ubuntu/macOS/Windows × Node 18/20/22). See [CHANGELOG](framework/CHANGELOG.md#400---2026-05-24--breaking-change) for migration.
+
 ---
 
 ## Supported Tools
@@ -12,10 +14,20 @@
 |------|-----------|----------|
 | **opencode** | `AGENTS.md` | `.opencode/commands/` (native) |
 | **Claude Code** | `CLAUDE.md` | `.claude/commands/` (native) |
-| **Cursor** | `.cursor/rules/spec-copilot.mdc` | Prompt routing |
-| **Windsurf** | `.windsurf/rules/spec-copilot.md` | Prompt routing |
+| **Cursor** | `.cursor/rules/spec-copilot.mdc` + `.cursorrules` (legacy) | Prompt routing |
+| **Windsurf** | `.windsurf/rules/spec-copilot.md` + `.windsurfrules` (legacy) | Prompt routing |
 | **GitHub Copilot** | `.github/copilot-instructions.md` | Prompt routing |
 | **Cline** | `.clinerules/spec-copilot.md` | Prompt routing |
+
+## Built-in Stack Adapters
+
+| Stack | File |
+|-------|------|
+| Spring Boot + Vue 3 | `framework/stack-adapters/spring-boot-vue3.md` |
+| React + Express | `framework/stack-adapters/react-express.md` |
+| Next.js 13+ (App Router) | `framework/stack-adapters/nextjs.md` |
+
+For other stacks, copy `_template.md` and fill in.
 
 ## Quick Start
 
@@ -44,13 +56,14 @@ The framework auto-detects your tool on subsequent commands (`update`, `doctor`,
 |---------|------|--------|
 | `/spec:init` | First time setup | Fills `rules/project-context.md` |
 | `/spec:bootstrap` | New empty project | Tech stack selection + scaffolding |
-| `/spec:propose <req>` | New requirement | `spec.md` (+ `tasks.md` if complex) |
-| `/spec:flow <req>` | Auto mode (simple/medium) | Full pipeline: propose → archive |
+| **`/spec:lite <req>`** | **Light requirement** (bug fix, UI tweak, small feature) | 5-section mini-spec → direct coding |
+| `/spec:propose <req>` | Heavy requirement | `spec.md` + `tasks.md` |
+| `/spec:flow <req>` | Auto mode | Full pipeline: propose → archive |
 | `/spec:apply <name>` | After spec confirmed | Code committed task by task |
-| `/spec:smoke <name>` | After /spec:apply | Build + API smoke test |
-| `/spec:review <name>` | After /spec:smoke | Spec compliance + code quality report |
+| `/spec:smoke <name>` | After /spec:apply | Build + E2E + API smoke |
+| `/spec:review <name>` | After /spec:smoke | Spec compliance + code quality |
 | `/spec:fix <name>` | After review issues | Fix commits + doc sync |
-| `/spec:archive <name>` | After review passes | Knowledge captured, docs updated, merge prompt |
+| `/spec:archive <name>` | After review passes | Knowledge captured, docs updated |
 | `/spec:docs [type]` | Anytime | README + API + Architecture + Deploy docs |
 | `/spec:hotfix <desc>` | Production incident | Minimal fix on hotfix branch |
 | `/spec:test <name>` | Need automated tests | Test code + run results |
@@ -106,82 +119,40 @@ npx @alenfitz/spec-copilot gate <name> smoke
 
 | Gate | Checks |
 |------|--------|
-| `apply` | Spec completeness + task interleaving + frontend task granularity |
-| `smoke` | **Build verification** + **skeleton detection** + TS any abuse + **E2E browser smoke** |
-| `review` | Smoke sentinel + feature coverage + API contract + contract consistency + dead code + hardcoded identity checks |
+| `apply` | Spec completeness + §9 cleared |
+| `smoke` | Build verification + skeleton detection + **E2E browser smoke** |
+| `review` | Smoke sentinel + feature coverage + API contract matching + contract consistency + hardcoded identity |
 | `archive` | Review sentinel + spec audit conclusion |
 
 ### E2E Browser Smoke
 
 Playwright-based end-to-end verification — catches "compiles but doesn't work" issues:
 
-- **Auto-detects** tech stack (Spring Boot + Vue3, Vite, etc.) and starts dev servers
+- **Auto-detects** tech stack (Spring Boot + Vue3, Vite, Next.js, etc.) and starts dev servers
 - **Spec-driven** route extraction from spec.md + project router files
-- **Acceptance-driven** ACxx coverage summary from the spec acceptance matrix
-- **Checks per page**: white screen, uncaught JS errors, API failures, framework error overlays
+- **Per-page checks**: white screen, uncaught JS errors, API 4xx/5xx, non-JSON responses, empty rendering, framework error overlays
+- **Active interaction**: search input, pagination clicks, form submission with auto-fill
 - **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
 
 Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
 
-### Contract Gate
+### Precise API Matching
 
-Available in current `3.2.x` releases.
+`review` uses your spec's API coverage matrix (§6.1) for precise function-level matching:
 
-The framework now blocks a frequent low-score failure mode: **frontend/backend contract drift**.
+- Frontend callers (e.g. `src/api/user.ts#getUser`) and backend entries (e.g. `UserController#getUser`) are matched exactly
+- Fallback to fuzzy grep only when the matrix is missing
+- Reduces false positives compared to keyword-only matching
 
-- Checks whether frontend request fields match backend required fields
-- Flags non-`snake_case` request/response field names when your spec requires `snake_case`
+### Contract Consistency
+
+`review` checks frontend request fields against backend required fields:
+
+- Flags field-name mismatches between caller and handler
 - Detects hardcoded current-user / operator identity in frontend code
+- Catches "UI looks complete but the API cannot actually be called" before it becomes a production issue
 
-This turns “the UI looks complete but the API cannot actually be called” into a gate failure instead of a review surprise.
-
-### Acceptance Coverage Gate
-
-`smoke` now consumes the `ACxx` acceptance matrix in `spec.md` and reports how many scenarios are fully covered, partially covered, or still missing evidence.
-
-- `happy` scenarios without end-to-end closure are treated as gate failures
-- `rule/error` scenarios show where validation or error-feedback evidence is still missing
-- multi-step scenarios are now checked step by step instead of only by coarse keyword coverage
-- detail-open, modal/drawer lifecycle, and list-to-detail return paths are now included in frontend interaction checks
-- The goal is to turn "spec has acceptance cases" into "gate can prove whether they were exercised"
-
-### Fxx to ACxx Trace Gate
-
-`review` now checks the traceability chain in both directions:
-
-- every `Fxx` feature point must point to at least one real `ACxx`
-- every `ACxx` must point back to at least one `Fxx` or `Vxx`
-- broken trace links are treated as requirement-matching risk, not just documentation drift
-
-### Vxx Rule Coverage Gate
-
-`review` now also checks whether `Vxx` business rules are actually grounded in implementation evidence:
-
-- frontend / backend rule landing points must exist when the rule says they should
-- trigger points and error/result evidence must be searchable
-- `verification` can no longer be a vague placeholder like "handled in code"
-
-### Precision Mapping
-
-`review` now prefers explicit spec matrices before falling back to fuzzy grep:
-
-- API coverage checks use `前端调用方` and `后端实现入口` from the spec matrix when available
-- this reduces false positives on frontend/backend matching
-
-### Rule-Check DSL
-
-The spec template now supports a small `RULE-CHECK` YAML block for `Vxx` rules.
-
-- it is a lightweight execution-oriented template, not a full test framework yet
-- `review` validates whether the block is structurally complete and aligned with the referenced `Vxx`
-- field-based rules now also need to line up with the API field checklist, so the DSL is no longer detached from the contract
-- field-based rules can now bind `api: APIxx`, allowing the gate to check whether those fields really land in the mapped frontend caller and backend entrypoint
-- `smoke/e2e` now also tries to collect runtime evidence for `RULE-CHECK`; when an AC scenario really hits the bound API but the request fields or error message drift from the spec, the gate will surface it directly
-- `state_transition` and `idempotent` now also have first-pass runtime evidence support; prefer declaring `field/from/to` and `key/repeat` explicitly
-- for `idempotent`, if the AC scenario explicitly describes repeat submission, smoke can now better distinguish frontend anti-double-submit behavior from actual duplicate requests reaching the backend
-- for real business validation, prefer adding `final_state`, `second_request`, `duplicate_status`, and `duplicate_message` so the gate output is closer to business acceptance language
-
-### Guard System (v2.6.0) — Code-Enforced Guardrails
+### Guard System — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:
 
@@ -195,18 +166,17 @@ npx @alenfitz/spec-copilot guard unlock     # Human unlock (clear hash record)
 **Gate blocks when protected files are tampered:**
 - ❌ Modifying `spec.md` after approval (auto-locked when gate passes)
 - ❌ Modifying `domain-rules.md` / `project-context.md` (permanently protected)
-- ❌ Committing skeleton `.vue` components (optional git hook)
+- ❌ Committing skeleton components (optional git hook)
 
 **Zero dependencies**: no git, no chmod, no special permissions. Works on all platforms.
-Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, opencode. Human unlock: `spec-copilot guard unlock <file>`.
+Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, opencode.
 
-## Complexity Tiers
+## Complexity Tiers (v4.0)
 
-| Tier | Criteria | What's Required |
-|------|----------|----------------|
-| 🟢 Simple | No API/schema/core flow/new dependency changes | Direct conversation, no spec |
-| 🟡 Medium | New APIs, non-core schema, new dependency | Spec (2-segment confirmation) |
-| 🔴 Complex | New subsystem, core flow, core schema, concurrency | Spec + tasks + knowledge |
+| Tier | Criteria | Command |
+|------|----------|---------|
+| 🟢 Light | No API/schema/core flow/new dependency changes | `/spec:lite` — 5-section mini-spec in chat, direct coding |
+| 🔴 Heavy | New API / schema change / core flow / new dep / data migration / concurrency | `/spec:propose` — full spec + tasks + gates |
 
 ## Upgrade Safety
 

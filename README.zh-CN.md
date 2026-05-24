@@ -4,6 +4,8 @@
 
 [English](https://github.com/Alenfitz/spec_copilot/blob/main/README.md)
 
+> **v4.0（破坏性变更）** — 一次正式的减法：spec 模板瘦身 63%、必填字段从 9 个降到 4 个、新增 `/spec:lite` 轻量需求路径、三个内置技术栈适配器（Vue + Spring Boot / React + Express / Next.js）、框架自身有了 37 个测试 + 跨平台 CI（Ubuntu/macOS/Windows × Node 18/20/22）。迁移说明见 [CHANGELOG](framework/CHANGELOG.md#400---2026-05-24--breaking-change)。
+
 ---
 
 ## 支持工具
@@ -12,10 +14,20 @@
 |------|-----------|---------|
 | **opencode** | `AGENTS.md` | `.opencode/commands/`（原生） |
 | **Claude Code** | `CLAUDE.md` | `.claude/commands/`（原生） |
-| **Cursor** | `.cursor/rules/spec-copilot.mdc` | Prompt 路由 |
-| **Windsurf** | `.windsurf/rules/spec-copilot.md` | Prompt 路由 |
+| **Cursor** | `.cursor/rules/spec-copilot.mdc` + `.cursorrules`（legacy） | Prompt 路由 |
+| **Windsurf** | `.windsurf/rules/spec-copilot.md` + `.windsurfrules`（legacy） | Prompt 路由 |
 | **GitHub Copilot** | `.github/copilot-instructions.md` | Prompt 路由 |
 | **Cline** | `.clinerules/spec-copilot.md` | Prompt 路由 |
+
+## 内置技术栈适配器
+
+| 栈 | 文件 |
+|----|------|
+| Spring Boot + Vue 3 | `framework/stack-adapters/spring-boot-vue3.md` |
+| React + Express | `framework/stack-adapters/react-express.md` |
+| Next.js 13+（App Router） | `framework/stack-adapters/nextjs.md` |
+
+其他栈：复制 `_template.md` 自行补充。
 
 ## 快速开始
 
@@ -23,20 +35,19 @@
 # 安装 — 指定你的工具
 npx @alenfitz/spec-copilot install --tool cursor
 npx @alenfitz/spec-copilot install --tool claude-code
-npx @alenfitz/spec-copilot install --tool windsurf
-# 可选: opencode, claude-code, cursor, windsurf, copilot, cline
+npx @alenfitz/spec-copilot install --tool all   # 一次装全部 6 个工具
 
 # 验证安装
 npx @alenfitz/spec-copilot doctor
 ```
 
-后续命令（`update`、`doctor` 等）自动识别已安装的工具。
+后续命令（`update`、`doctor`、`sync` 等）自动识别已安装的工具。
 
-## 核心理念
+## 核心理念（三条）
 
-1. **Spec 先行（No Spec, No Code）** — AI 评估复杂度、逐条澄清、分段生成 spec，确认才写代码。
-2. **Task 节奏可控** — AI 完成一个原子任务就停下来，展示验证证据，立即 commit，等你说"继续"才推进。
-3. **知识飞轮** — 每个需求的踩坑记录归档到带 tag 分类的知识库，下个需求自动读取。
+1. **No Spec, No Code** — 没 spec 不写代码。Spec 和代码冲突时，错的是代码。
+2. **逐 Task 停顿** — 完成一个 task 就停下来展示验证证据，等用户说"继续"。
+3. **不编造，要找证据** — 代码现状必须有出处（文件路径 + 类名/方法名）。
 
 ## 命令速查
 
@@ -44,13 +55,14 @@ npx @alenfitz/spec-copilot doctor
 |------|-------|------|
 | `/spec:init` | 首次接入项目 | 填充 `rules/project-context.md` |
 | `/spec:bootstrap` | 新空项目 | 栈选型 + 脚手架搭建 |
-| `/spec:propose <需求>` | 有新需求 | `spec.md`（复杂需求 + `tasks.md`） |
-| `/spec:flow <需求>` | 全自动模式（🟢/🟡） | 完整流水线：propose → archive |
+| **`/spec:lite <需求>`** | **轻量需求**（bug 修复 / UI 调整 / 小功能） | 5 节迷你 spec → 直接编码 |
+| `/spec:propose <需求>` | 重量需求 | `spec.md` + `tasks.md` |
+| `/spec:flow <需求>` | 全自动模式 | 完整流水线：propose → archive |
 | `/spec:apply <变更名>` | spec 确认后 | 逐 task 提交的代码 |
-| `/spec:smoke <变更名>` | /spec:apply 完成后 | 编译 + 接口冒烟报告 |
-| `/spec:review <变更名>` | /spec:smoke 通过后 | Spec 合规 + 代码质量审查报告 |
+| `/spec:smoke <变更名>` | /spec:apply 完成后 | 构建 + E2E + 接口冒烟 |
+| `/spec:review <变更名>` | /spec:smoke 通过后 | Spec 合规 + 代码质量审查 |
 | `/spec:fix <变更名>` | review 有问题 | 修复 commit + 文档同步 |
-| `/spec:archive <变更名>` | review 通过后 | 知识沉淀 + 文档更新 + 分支合并提示 |
+| `/spec:archive <变更名>` | review 通过后 | 知识沉淀 + 文档更新 |
 | `/spec:docs [类型]` | 任何时候 | README + API + 架构 + 部署文档 |
 | `/spec:hotfix <描述>` | 线上故障 | 最小修复 + hotfix 分支 |
 | `/spec:test <变更名>` | 补自动化测试 | 测试代码 + 运行报告 |
@@ -78,19 +90,18 @@ npx @alenfitz/spec-copilot uninstall --confirm       # 移除框架
 ├── <工具专属提示词文件>               ← AI 读取
 ├── <工具专属命令目录/>               ← 原生命令（如支持）
 │
-├── README.md                          ← 自动生成的项目文档
-├── docs/                              ← API、架构、部署文档
-│
 └── spec_copilot/
-    ├── commands/                      ← 12 个命令定义
+    ├── commands/                      ← 13 个命令定义
     ├── rules/
     │   ├── coding-style.md            ← 编码通用规范
     │   ├── security.md                ← 安全红线
-    │   ├── project-context.md         ← 项目技术上下文（/spec:init 填充）
+    │   ├── project-context.md         ← 项目技术上下文
     │   └── domain-rules.md            ← 业务领域规则（你来填）
     ├── stack-adapters/
-    │   ├── _template.md               ← 新栈适配模板
-    │   └── spring-boot-vue3.md        ← 内置适配（示例）
+    │   ├── _template.md
+    │   ├── spring-boot-vue3.md
+    │   ├── react-express.md
+    │   └── nextjs.md
     ├── knowledge/index.md             ← 带 tag 索引的知识库
     ├── changes/templates/             ← spec.md / tasks.md / log.md 模板
     ├── archives/                      ← 已归档的需求
@@ -107,108 +118,62 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 
 | 门禁 | 检查项 |
 |------|--------|
-| `apply` | Spec 完整性 + 前后端 task 交织度 + 前端 task 粒度 |
-| `smoke` | **构建验证** + **骨架检测** + TS any 泛滥 + **E2E 浏览器冒烟** |
-| `review` | smoke 哨兵 + 功能点覆盖 + API 契约 + 契约一致性 + 死代码 + 硬编码身份检查 |
+| `apply` | Spec 完整性 + §9 已清空 |
+| `smoke` | 构建验证 + 骨架组件检测 + **E2E 浏览器冒烟** |
+| `review` | smoke 哨兵 + 功能点覆盖 + API 契约精确匹配 + 契约一致性 + 硬编码身份检测 |
 | `archive` | review 哨兵 + spec 审查结论 |
 
 ### E2E 浏览器冒烟
 
 基于 Playwright 的端到端浏览器验证 — 抓住"能编译但不能用"的问题：
 
-- **自动检测**技术栈（Spring Boot + Vue3、Vite 等）并启动开发服务器
+- **自动检测**技术栈（Spring Boot + Vue3、Vite、Next.js 等）并启动开发服务器
 - **Spec 驱动**路由提取：从 spec.md + 项目 router 文件自动生成测试页面
-- **验收场景驱动**：消费 spec 里的 ACxx 验收矩阵并输出覆盖统计
-- **逐页面检查**：白屏、未捕获 JS 异常、API 连接失败、框架错误遮罩
+- **逐页面检查**：白屏、未捕获 JS 异常、API 4xx/5xx、非 JSON 响应、空数据渲染、错误遮罩
+- **主动交互**：搜索输入、分页点击、表单提交（自动填表 + 提交）
 - **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
 
-使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
+使用系统已安装的 Chrome — 无需额外安装。
 
-### 契约门禁
+### 精确 API 映射
 
-当前 `3.2.x` 版本已内置这组检查。
+`review` 使用 spec.md §6.1 接口覆盖矩阵做函数级精确匹配：
 
-框架现在会主动拦截一种非常常见的低分问题：**前后端契约漂移**。
+- 前端调用方（如 `src/api/user.ts#getUser`）和后端实现入口（如 `UserController#getUser`）精确对应
+- 矩阵缺失时回退到模糊 grep
+- 比纯关键字匹配的误报率低
+
+### 契约一致性
+
+`review` 会主动检查前后端契约漂移：
 
 - 检查前端请求字段是否覆盖后端必填字段
-- 当 spec 要求 `snake_case` 时，识别不符合风格的请求/响应字段
-- 检测前端是否把当前登录人、操作人、业务身份写死
+- 检测前端是否把当前登录人、操作人写死
+- 抓住"页面看起来做完了但接口调不通"
 
-这会把“页面看起来做完了，但接口其实调不通”从 review 阶段的问题，前置成 gate 阶段的失败。
+### Guard 代码级护栏
 
-### 验收场景覆盖门禁
-
-`smoke` 现在会消费 `spec.md` 中的 `ACxx` 验收场景矩阵，并输出完整覆盖、部分覆盖、未覆盖的统计。
-
-- `happy` 主流程场景没有形成端到端闭环时，会直接阻断 gate
-- `rule/error` 场景会暴露缺失的校验反馈或异常路径证据
-- 多步骤场景现在会按步骤逐项判定，而不只是做粗粒度关键词覆盖
-- 详情打开、弹窗/抽屉生命周期、列表到详情再返回这类前端语义链路也纳入了交互检查
-- 目的就是把“spec 写了验收”推进成“gate 真能证明有没有跑到”
-
-### Fxx 到 ACxx 追踪门禁
-
-`review` 现在会校验需求追踪链是否双向闭环：
-
-- 每个 `Fxx` 功能点都必须指向至少一个真实存在的 `ACxx`
-- 每个 `ACxx` 都必须回指至少一个 `Fxx` 或 `Vxx`
-- 追踪链断裂会被视为需求匹配风险，而不只是文档书写问题
-
-### Vxx 业务规则覆盖门禁
-
-`review` 现在也会检查 `Vxx` 业务规则是否真正落到了实现证据上：
-
-- 规则声明需要的前端/后端落点必须真实存在
-- `触发点` 和 `错误文案/结果` 必须能被 gate 搜索到
-- `验证方式` 不能再用“代码里处理”这种模糊占位
-
-### 精确映射优先
-
-`review` 现在会优先消费 spec 中的显式矩阵，而不是一开始就依赖模糊 grep：
-
-- 接口覆盖检查会优先使用 `前端调用方` 和 `后端实现入口`
-- 这样能减少前后端匹配中的误报
-
-### Rule-Check DSL
-
-spec 模板现在支持一个轻量的 `RULE-CHECK` YAML 片段来描述 `Vxx` 规则。
-
-- 它目前还不是完整测试框架，但已经是面向执行的结构化模板
-- `review` 会校验这个片段是否完整、是否和对应的 `Vxx` 对齐
-- 依赖字段的规则还必须和 API 字段清单对齐，避免 DSL 脱离契约独自漂移
-- 字段型规则现在还建议绑定 `api: APIxx`，让 gate 继续检查这些字段有没有真正落到前端调用方和后端实现入口
-- `smoke/e2e` 现在也会尝试收集 `RULE-CHECK` 的运行时证据；如果 AC 场景真实触发了绑定 API，但请求字段或错误文案和 spec 对不上，gate 会直接暴露出来
-- `state_transition` 和 `idempotent` 也开始有运行时证据能力，推荐分别写清 `field/from/to` 与 `key/repeat`
-- 对 `idempotent` 来说，如果 AC 场景能明确描述“重复提交”，smoke 现在还能进一步区分是前端防重拦住了第二次，还是后端真的收到了重复请求
-- 如果你要拿真实业务场景验证，推荐把 `final_state`、`second_request`、`duplicate_status`、`duplicate_message` 也写进 DSL，这样 gate 输出会更接近业务验收语言
-
-### Guard 代码级护栏（v2.6.0）
-
-AI 工具会无视提示词中的"铁律"。Guard 用 **hash 校验 @ gate 时** 做硬拦截 — AI 可以改文件，但改了过不了 gate：
+AI 工具会无视提示词中的"铁律"。Guard 用 **hash 校验 @ gate 时** 做硬拦截：
 
 ```bash
-npx @alenfitz/spec-copilot guard install    # 初始化保护（记录 hash）
-npx @alenfitz/spec-copilot guard status     # 查看保护状态与完整性
-npx @alenfitz/spec-copilot guard lock       # 锁定文件（记录 hash，按阶段自动锁定）
-npx @alenfitz/spec-copilot guard unlock     # 人类解锁（清除 hash 记录）
+npx @alenfitz/spec-copilot guard install    # 初始化保护
+npx @alenfitz/spec-copilot guard status     # 查看保护状态
+npx @alenfitz/spec-copilot guard lock       # 锁定文件
+npx @alenfitz/spec-copilot guard unlock     # 解锁
 ```
 
 **Gate 拦截被保护文件篡改：**
 - ❌ 审批后修改 `spec.md`（gate 通过后自动锁定）
 - ❌ 修改 `domain-rules.md` / `project-context.md`（永久保护）
-- ❌ 提交骨架 `.vue` 组件（可选 git hook）
 
-**零依赖**：不需要 git / chmod / 特殊权限，所有平台通用。
-**所有 AI 工具通用**：Claude Code / Cursor / Windsurf / Copilot / Cline / opencode。
-人类解锁：`spec-copilot guard unlock <文件>`。
+**零依赖**：不需要 git / chmod / 特殊权限。**所有 AI 工具通用**。
 
-## 复杂度分级
+## 复杂度分级（v4.0 两档）
 
-| 级别 | 判定标准（按影响面） | 需要什么 |
-|------|-----------------|---------|
-| 🟢 简单 | 不改 API / 不改表 / 不改核心流程 / 不引入新依赖 | 直接对话 |
-| 🟡 中等 | 新增接口 / 改表非核心字段 / 新依赖 | spec（两段确认） |
-| 🔴 复杂 | 新子系统 / 核心流程 / 核心表结构 / 并发事务 | spec + tasks + knowledge |
+| 级别 | 判定 | 命令 |
+|------|------|------|
+| 🟢 轻 | 不改 API / 不改表 / 不改核心流程 / 不引入新依赖 | `/spec:lite` — 对话里 5 节迷你 spec，直接编码 |
+| 🔴 重 | 触及任一：新增 API / 改表结构 / 改核心流程 / 新依赖 / 数据迁移 / 并发或事务 | `/spec:propose` — 完整 spec + tasks + gate |
 
 ## 升级安全性
 
