@@ -143,6 +143,14 @@ This turns “the UI looks complete but the API cannot actually be called” int
 - `rule/error` scenarios show where validation or error-feedback evidence is still missing
 - The goal is to turn "spec has acceptance cases" into "gate can prove whether they were exercised"
 
+### Fxx to ACxx Trace Gate
+
+`review` now checks the traceability chain in both directions:
+
+- every `Fxx` feature point must point to at least one real `ACxx`
+- every `ACxx` must point back to at least one `Fxx` or `Vxx`
+- broken trace links are treated as requirement-matching risk, not just documentation drift
+
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:

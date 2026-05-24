@@ -122,6 +122,81 @@ function readFrameworkFile(filename) {
   return fs.readFileSync(filepath, 'utf-8');
 }
 
+function parseFeatureCoverageMatrix(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(F\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      feature: m[2].trim(),
+      frontend: m[3].trim(),
+      backend: m[4].trim(),
+      acceptanceIds: m[5].split(',').map(s => s.trim()).filter(Boolean),
+      doneRule: m[6].trim(),
+    });
+  }
+  return rows;
+}
+
+function parseAcceptanceMatrix(specContent) {
+  const rows = [];
+  const regex = /^\|\s*(AC\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    rows.push({
+      id: m[1].trim(),
+      type: m[2].trim(),
+      steps: m[3].trim(),
+      expected: m[4].trim(),
+      refs: m[5].split(',').map(s => s.trim()).filter(Boolean),
+    });
+  }
+  return rows;
+}
+
+function buildFeatureAcceptanceTrace(specContent) {
+  const featureRows = parseFeatureCoverageMatrix(specContent);
+  const acceptanceRows = parseAcceptanceMatrix(specContent);
+  const acceptanceIds = new Set(acceptanceRows.map(r => r.id));
+  const featureIds = new Set(featureRows.map(r => r.id));
+  const trace = {
+    featureRows,
+    acceptanceRows,
+    missingAcceptanceForFeatures: [],
+    invalidAcceptanceRefs: [],
+    acceptanceWithoutFeature: [],
+    orphanAcceptance: [],
+  };
+
+  for (const row of featureRows) {
+    if (row.acceptanceIds.length === 0) {
+      trace.missingAcceptanceForFeatures.push(row.id);
+      continue;
+    }
+    const invalid = row.acceptanceIds.filter(id => !acceptanceIds.has(id));
+    if (invalid.length > 0) {
+      trace.invalidAcceptanceRefs.push({ featureId: row.id, acceptanceIds: invalid });
+    }
+  }
+
+  for (const row of acceptanceRows) {
+    const featureRefs = row.refs.filter(ref => /^F\d+$/i.test(ref));
+    const invalidFeatureRefs = featureRefs.filter(id => !featureIds.has(id));
+    if (invalidFeatureRefs.length > 0) {
+      trace.acceptanceWithoutFeature.push({ acceptanceId: row.id, featureIds: invalidFeatureRefs });
+    }
+    if (featureRefs.length === 0) {
+      const hasRuleRef = row.refs.some(ref => /^V\d+$/i.test(ref));
+      if (!hasRuleRef) {
+        trace.orphanAcceptance.push(row.id);
+      }
+    }
+  }
+
+  return trace;
+}
+
 /** 解析 --tool 参数，支持 --tool all 和 --tool cursor,claude-code */
 function resolveAdapters(args, projectRoot) {
   const toolIdx = args.indexOf('--tool');
@@ -862,6 +937,38 @@ async function cmdGate(args) {
         }
       }
 
+      // ─── Fxx ↔ ACxx 双向追踪检查 ───
+      try {
+        const trace = buildFeatureAcceptanceTrace(specContent);
+        const traceIssues = [];
+        if (trace.featureRows.length > 0 || trace.acceptanceRows.length > 0) {
+          if (trace.missingAcceptanceForFeatures.length > 0) {
+            traceIssues.push(`功能点缺少验收场景: ${trace.missingAcceptanceForFeatures.slice(0, 10).join(', ')}`);
+          }
+          if (trace.invalidAcceptanceRefs.length > 0) {
+            traceIssues.push(
+              `功能点引用不存在的 AC: ${trace.invalidAcceptanceRefs.slice(0, 8).map(item => `${item.featureId} -> ${item.acceptanceIds.join('/')}`).join(', ')}`
+            );
+          }
+          if (trace.acceptanceWithoutFeature.length > 0) {
+            traceIssues.push(
+              `AC 引用了不存在的功能点: ${trace.acceptanceWithoutFeature.slice(0, 8).map(item => `${item.acceptanceId} -> ${item.featureIds.join('/')}`).join(', ')}`
+            );
+          }
+          if (trace.orphanAcceptance.length > 0) {
+            traceIssues.push(`AC 未关联功能点或规则: ${trace.orphanAcceptance.slice(0, 10).join(', ')}`);
+          }
+
+          if (traceIssues.length > 0) {
+            fail(`Fxx ↔ ACxx 双向追踪失败：\n   ${traceIssues.join('\n   ')}\n   ⚠️ 每个功能点必须能追到验收场景，每个 AC 场景也必须能回指功能点或规则`);
+          } else {
+            log.ok(`Fxx ↔ ACxx 双向追踪：${trace.featureRows.length} 个功能点 / ${trace.acceptanceRows.length} 个 AC 场景全部连通`);
+          }
+        }
+      } catch (e) {
+        log.warn(`Fxx ↔ ACxx 双向追踪检查跳过：${e.message.split('\n')[0]}`);
+      }
+
       // ─── 反"太嗨"机制 6：前端死代码检测（文件存在但无引用） ───
       // 针对"创建 5 个票模板但 index.vue hardcode 一种"这类场景：
       // 扫描 src/views 和 src/components 下的 .vue / .tsx / .jsx 文件，
@@ -1580,7 +1687,8 @@ async function cmdGate(args) {
       } else {
         scoreItems = [
           { name: 'smoke 哨兵', weight: 8, failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
-          { name: '功能点覆盖', weight: 20, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
+          { name: '功能点覆盖', weight: 16, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
+          { name: '验收追踪', weight: 12, failPatterns: [/Fxx ↔ ACxx/, /功能点缺少验收场景/, /AC 未关联功能点/, /引用不存在的 AC/] },
           { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/] },
           { name: '契约一致性', weight: 12, failPatterns: [/契约一致性/, /缺少必填字段/, /snake_case/] },
           { name: '错误处理', weight: 10, failPatterns: [/错误处理缺失/, /无.*catch/] },

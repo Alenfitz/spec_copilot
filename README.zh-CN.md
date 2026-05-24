@@ -144,6 +144,14 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 - `rule/error` 场景会暴露缺失的校验反馈或异常路径证据
 - 目的就是把“spec 写了验收”推进成“gate 真能证明有没有跑到”
 
+### Fxx 到 ACxx 追踪门禁
+
+`review` 现在会校验需求追踪链是否双向闭环：
+
+- 每个 `Fxx` 功能点都必须指向至少一个真实存在的 `ACxx`
+- 每个 `ACxx` 都必须回指至少一个 `Fxx` 或 `Vxx`
+- 追踪链断裂会被视为需求匹配风险，而不只是文档书写问题
+
 ### Guard 代码级护栏（v2.6.0）
 
 AI 工具会无视提示词中的"铁律"。Guard 用 **hash 校验 @ gate 时** 做硬拦截 — AI 可以改文件，但改了过不了 gate：
