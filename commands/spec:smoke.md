@@ -1,5 +1,5 @@
 ---
-description: 冒烟验证（构建 + 骨架检测 + E2E 浏览器验证 + 接口测试）
+description: 冒烟验证（构建 + 骨架检测 + E2E 联调校验 + 交互测试 + 客观评分）
 ---
 
 请按 AGENTS.md 中定义的 /smoke 流程执行：
@@ -8,9 +8,9 @@ description: 冒烟验证（构建 + 骨架检测 + E2E 浏览器验证 + 接口
 
 ## 步骤
 
-### Step 0：程序化 gate 检查（v2.2.0+ 自动化）
+### Step 0：程序化 gate 检查（v3.0.0 自动化）
 
-运行 CLI 门禁，获取客观构建结果、骨架检测结果和 E2E 浏览器验证结果：
+运行 CLI 门禁，获取客观构建结果、联调校验结果和交互测试结果：
 
 ```bash
 npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
@@ -20,11 +20,14 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 - 前后端构建验证（npm run build / mvn compile）
 - 骨架组件检测（el-empty / TODO-only / 空壳组件）
 - TypeScript any 泛滥检测（warning 级别）
-- **E2E 浏览器冒烟**（v2.3.0 新增，使用系统 Chrome，无需额外安装）：
+- **E2E 联调校验**（v2.7.0+，使用系统 Chrome，无需额外安装）：
   - 自动启动/检测前后端开发服务器
   - 从 spec.md 提取页面路由，用 headless Chrome 逐页面检查
-  - 检查项：白屏、JS 异常、API 连接失败、5xx 响应、框架错误遮罩
+  - **L1 基础检查**：白屏、JS 异常、框架错误遮罩
+  - **L2 联调检查**：API 4xx/5xx、API 返回非 JSON、空数据渲染、控制台 API 错误
+  - **L3 交互测试**：搜索框输入验证、分页点击验证、表单提交验证
   - 完成后自动关闭启动的服务器
+- **客观评分**（v2.9.0+）：按维度打分（满分 100），与 AI 自评对比
 
 可选 flags：
 - `--headed`：显示浏览器窗口（调试用）

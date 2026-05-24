@@ -4,6 +4,44 @@
 
 ---
 
+## [3.0.0] - 2026-05-24
+
+### 新增
+
+**六大特性升级 — 从框架到平台**
+
+**P0-1: CI 自动化（ci-gen.js）**
+- `spec-copilot ci setup` 一键生成 GitHub Actions workflow
+- PR 提交时自动运行 `gate smoke` + `gate review`
+- `--e2e` 模式：生成含前后端启动 + 浏览器测试的完整 workflow
+- 评分结果自动上传为 artifacts
+
+**P0-2: 对抗性测试代码化（adversarial-test.js）**
+- 从纯提示词升级为代码自动执行
+- 从 spec.md 提取写操作 API → 自动构造边界/异常输入 → 直接调用检查
+- 内置攻击向量：空输入、超长字符串、SQL 注入、XSS、路径穿越、类型错误
+- 500 响应 = 后端未做输入校验，报告为漏洞
+- review gate 中有运行中后端时自动触发
+
+**P1-1: API Schema 校验**
+- 从 spec.md §6 接口契约提取响应字段结构
+- smoke 时拦截 API 实际响应，比对字段名是否匹配
+- 支持 camelCase/snake_case 互转 + 分页格式自动解包
+- 字段缺失报告为 warning
+
+**P1-2: 截图对比**
+- smoke 时自动截图保存到 `.spec-copilot/screenshots/`
+- 下次 smoke 与上次截图对比，文件大小变化 >30% 报警
+- UI 回归问题自动检测
+
+**P2-1: spec:smoke 命令更新**
+- 命令文件反映 v2.7-3.0 所有新增检查（L1/L2/L3）
+
+**P2-2: 文档更新**
+- help 文本增加 `ci` 命令
+
+---
+
 ## [2.9.0] - 2026-05-24
 
 ### 新增

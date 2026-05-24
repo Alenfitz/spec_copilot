@@ -327,6 +327,150 @@ function killProcess(proc) {
   } catch { /* already dead */ }
 }
 
+// ─── v3.0.0 API Schema 提取 ────────────────────────────────
+
+/**
+ * 从 spec.md §6 API 契约中提取响应字段结构
+ * 用于在 smoke 时校验 API 实际返回的字段名是否匹配
+ */
+function extractApiSchemas(specContent) {
+  const schemas = {};
+
+  // 匹配 API 声明后的响应字段表格
+  const apiBlockRegex = /(GET|POST|PUT|DELETE|PATCH)\s+(\/api\/[^\s|,)）\]]+)[\s\S]*?(?=(?:GET|POST|PUT|DELETE|PATCH)\s+\/api\/|##\s|\n---|\Z)/g;
+  let m;
+  while ((m = apiBlockRegex.exec(specContent)) !== null) {
+    const method = m[1];
+    const apiPath = m[2];
+    const block = m[0];
+
+    // 从表格中提取响应字段
+    const fieldRegex = /\|\s*(\w+)\s*\|\s*(\w+)\s*\|/g;
+    const fields = [];
+    let fm;
+    while ((fm = fieldRegex.exec(block)) !== null) {
+      const name = fm[1];
+      if (name !== '字段' && name !== 'field' && name !== 'Field' && name !== '参数' && name !== 'name') {
+        fields.push({ name, type: fm[2] });
+      }
+    }
+
+    if (fields.length > 0) {
+      const key = `${method} ${apiPath}`;
+      schemas[key] = { method, path: apiPath, fields };
+    }
+  }
+
+  return schemas;
+}
+
+/**
+ * 校验 API 实际响应的字段是否包含 spec 中声明的字段
+ */
+function validateApiSchema(specSchema, actualJson) {
+  if (!actualJson || typeof actualJson !== 'object') return { pass: true, missing: [] };
+
+  // 尝试找到数据层（常见的包装格式：{ data: ... }, { code: 0, data: ... }）
+  let dataObj = actualJson;
+  if (actualJson.data && typeof actualJson.data === 'object') {
+    dataObj = actualJson.data;
+  }
+  // 如果数据是数组，取第一个元素
+  if (Array.isArray(dataObj) && dataObj.length > 0) {
+    dataObj = dataObj[0];
+  }
+  if (dataObj && dataObj.records && Array.isArray(dataObj.records) && dataObj.records.length > 0) {
+    dataObj = dataObj.records[0]; // 分页格式
+  }
+  if (dataObj && dataObj.list && Array.isArray(dataObj.list) && dataObj.list.length > 0) {
+    dataObj = dataObj.list[0];
+  }
+  if (dataObj && dataObj.items && Array.isArray(dataObj.items) && dataObj.items.length > 0) {
+    dataObj = dataObj.items[0];
+  }
+
+  if (!dataObj || typeof dataObj !== 'object' || Array.isArray(dataObj)) {
+    return { pass: true, missing: [] };
+  }
+
+  const actualKeys = Object.keys(dataObj);
+  const missing = [];
+  for (const field of specSchema.fields) {
+    // 模糊匹配：camelCase 和 snake_case 互转
+    const nameVariants = [
+      field.name,
+      field.name.replace(/([A-Z])/g, '_$1').toLowerCase(), // camelCase → snake_case
+      field.name.replace(/_([a-z])/g, (_, c) => c.toUpperCase()), // snake_case → camelCase
+    ];
+    const found = actualKeys.some(k => nameVariants.some(v => k.toLowerCase() === v.toLowerCase()));
+    if (!found) {
+      missing.push(field.name);
+    }
+  }
+
+  return { pass: missing.length === 0, missing };
+}
+
+// ─── v3.0.0 截图对比 ────────────────────────────────────────
+
+/**
+ * 截图并保存到 .spec-copilot/screenshots/
+ * @returns {Promise<string|null>} 截图文件路径
+ */
+async function takeAndSaveScreenshot(page, projectRoot, routeKey) {
+  try {
+    const ssDir = path.join(projectRoot, '.spec-copilot', 'screenshots');
+    if (!fs.existsSync(ssDir)) fs.mkdirSync(ssDir, { recursive: true });
+
+    const safeName = routeKey.replace(/[\/\\:*?"<>|]/g, '_').replace(/^_/, '');
+    const ssPath = path.join(ssDir, `${safeName}.png`);
+    const prevPath = path.join(ssDir, `${safeName}.prev.png`);
+
+    // 如果已有截图，重命名为 .prev.png
+    if (fs.existsSync(ssPath)) {
+      fs.copyFileSync(ssPath, prevPath);
+    }
+
+    await page.screenshot({ path: ssPath, fullPage: false });
+    return ssPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 比较两张截图的像素差异（简单版：比较文件大小差异作为启发式）
+ * 真正的像素对比需要 pixelmatch 库，这里用文件大小差异 + 尺寸比较作为轻量替代
+ *
+ * @returns {{ changed: boolean, delta: number, detail: string }|null}
+ */
+function compareScreenshots(currentPath, projectRoot) {
+  try {
+    const safeName = path.basename(currentPath, '.png');
+    const prevPath = path.join(path.dirname(currentPath), `${safeName}.prev.png`);
+
+    if (!fs.existsSync(prevPath)) return null; // 首次截图，无对比
+
+    const currentSize = fs.statSync(currentPath).size;
+    const prevSize = fs.statSync(prevPath).size;
+    const sizeDelta = Math.abs(currentSize - prevSize);
+    const sizeRatio = sizeDelta / Math.max(currentSize, prevSize);
+
+    // 文件大小变化超过 30% 视为 UI 有变化
+    if (sizeRatio > 0.3) {
+      return {
+        changed: true,
+        delta: Math.round(sizeRatio * 100),
+        detail: `截图文件大小变化 ${Math.round(sizeRatio * 100)}%（${prevSize} → ${currentSize} bytes）`,
+      };
+    }
+
+    return { changed: false, delta: Math.round(sizeRatio * 100), detail: '' };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Spec 解析 ───────────────────────────────────────────────
 
 /**
@@ -1479,6 +1623,46 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       const pageResults = [];
       const interactionResults = [];  // v2.8.0
       const allConsoleErrors = [];
+      const screenshotChanges = [];   // v3.0.0
+
+      // v3.0.0: 提取 API schema 用于响应字段校验
+      const apiSchemas = extractApiSchemas(specContent);
+
+      // v3.0.0: 监听 API 响应做 schema 校验
+      const schemaViolations = [];
+      const onSchemaResponse = async (res) => {
+        const url = res.url();
+        if (!url.includes('/api/') || res.status() < 200 || res.status() >= 300) return;
+
+        try {
+          const contentType = res.headers()['content-type'] || '';
+          if (!contentType.includes('json')) return;
+
+          const body = await res.json().catch(() => null);
+          if (!body) return;
+
+          // 找匹配的 schema
+          const method = res.request().method();
+          const urlPath = new URL(url).pathname;
+
+          for (const [key, schema] of Object.entries(apiSchemas)) {
+            // 模糊匹配路径（去掉数字参数）
+            const schemaPath = schema.path.replace(/\{[^}]+\}/g, '\\d+');
+            if (schema.method === method && new RegExp(schemaPath).test(urlPath)) {
+              const validation = validateApiSchema(schema, body);
+              if (!validation.pass) {
+                schemaViolations.push({
+                  api: `${method} ${urlPath}`,
+                  specFields: schema.fields.map(f => f.name),
+                  missing: validation.missing,
+                });
+              }
+              break;
+            }
+          }
+        } catch { /* 校验异常静默 */ }
+      };
+      page.on('response', onSchemaResponse);
 
       for (const routeInfo of testablePages) {
         const result = await checkPage(page, frontendUrl, routeInfo, timeout);
@@ -1487,6 +1671,21 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
           allConsoleErrors.push(...result.warnings.filter(w => w.includes('控制台错误')));
         }
 
+        // v3.0.0: 截图 + 对比
+        try {
+          const ssPath = await takeAndSaveScreenshot(page, projectRoot, routeInfo.route);
+          if (ssPath) {
+            const comparison = compareScreenshots(ssPath, projectRoot);
+            if (comparison && comparison.changed) {
+              screenshotChanges.push({
+                route: routeInfo.route,
+                ...comparison,
+              });
+              result.warnings.push(`UI 变化：${comparison.detail}`);
+            }
+          }
+        } catch { /* 截图失败不影响 */ }
+
         // v2.8.0: 被动检查通过 + 非 authGated → 执行主动交互测试
         if (result.pass && !result.authGated) {
           try {
@@ -1494,7 +1693,6 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
             if (interResult.interactions.length > 0 || interResult.failures.length > 0) {
               interactionResults.push(interResult);
             }
-            // 交互测试的 failures 也算入该页面的 failures
             if (interResult.failures.length > 0) {
               result.failures.push(...interResult.failures);
               result.pass = false;
@@ -1510,6 +1708,19 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
             await page.goto(`${frontendUrl}${routeInfo.route}`, { waitUntil: 'networkidle', timeout });
             await page.waitForTimeout(500);
           } catch { /* 恢复失败不影响后续页面 */ }
+        }
+      }
+
+      page.removeListener('response', onSchemaResponse);
+
+      // v3.0.0: schema 校验结果合并到页面结果
+      if (schemaViolations.length > 0) {
+        for (const v of schemaViolations) {
+          // 找对应页面或加到第一个页面
+          const targetPage = pageResults.find(p => !p.authGated) || pageResults[0];
+          if (targetPage) {
+            targetPage.warnings.push(`API Schema 不匹配 ${v.api}: spec 声明字段 [${v.missing.join(', ')}] 在实际响应中未找到`);
+          }
         }
       }
 
@@ -1548,6 +1759,8 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         apiInteractionSummary,
         interactionResults,      // v2.8.0
         interactionSummary,      // v2.8.0
+        schemaViolations,        // v3.0.0
+        screenshotChanges,       // v3.0.0
         consoleErrors: allConsoleErrors,
         servers: serverInfo,
         summary: {

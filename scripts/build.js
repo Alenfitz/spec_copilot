@@ -81,6 +81,8 @@ obfuscateFile(path.join(root, 'bin', 'frontend-checks.js'), path.join(dist, 'bin
 obfuscateFile(path.join(root, 'bin', 'e2e-smoke.js'), path.join(dist, 'bin', 'e2e-smoke.js'));
 obfuscateFile(path.join(root, 'bin', 'guard.js'), path.join(dist, 'bin', 'guard.js'));
 obfuscateFile(path.join(root, 'bin', 'review-checks.js'), path.join(dist, 'bin', 'review-checks.js'));
+obfuscateFile(path.join(root, 'bin', 'ci-gen.js'), path.join(dist, 'bin', 'ci-gen.js'));
+obfuscateFile(path.join(root, 'bin', 'adversarial-test.js'), path.join(dist, 'bin', 'adversarial-test.js'));
 obfuscateFile(path.join(root, 'adapters', 'index.js'), path.join(dist, 'adapters', 'index.js'));
 
 // Restore shebang at top（必须是文件第一行，license header 移到 shebang 之后）

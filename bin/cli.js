@@ -594,6 +594,18 @@ async function cmdGate(args) {
               if (is.paginationTested) tested.push('分页');
               log.ok(`  交互测试: ${is.totalInteractions} 项交互${tested.length ? `（${tested.join('、')}）` : ''}${is.failures ? ` / ${is.failures} 项失败` : ''}`);
             }
+            // v3.0.0: 显示 API Schema 校验结果
+            if (e2eResult.schemaViolations && e2eResult.schemaViolations.length > 0) {
+              for (const v of e2eResult.schemaViolations) {
+                log.warn(`  API Schema 不匹配 ${v.api}: 缺少字段 [${v.missing.join(', ')}]`);
+              }
+            }
+            // v3.0.0: 显示截图变化
+            if (e2eResult.screenshotChanges && e2eResult.screenshotChanges.length > 0) {
+              for (const sc of e2eResult.screenshotChanges) {
+                log.warn(`  UI 变化 ${sc.route}: ${sc.detail}`);
+              }
+            }
             if (e2eResult.servers.alreadyRunning) {
               log.info('  使用已运行的开发服务器');
             }
@@ -1304,6 +1316,49 @@ async function cmdGate(args) {
         }
       } catch (e) {
         log.warn(`独立 Reviewer 检查跳过：${e.message.split('\n')[0]}`);
+      }
+
+      // ─── v3.0.0 对抗性测试（有运行中的后端时自动执行）───
+      try {
+        const { runAdversarialTests } = require('./adversarial-test');
+        // 检测后端是否在运行
+        const STACK_PROFILES = require('./e2e-smoke').resolvePlaywright ? null : null; // 不依赖 playwright
+        const backendPorts = [8080, 8081, 3000, 3001, 5000];
+        let backendUrl = null;
+
+        for (const port of backendPorts) {
+          try {
+            const net = require('net');
+            const isUp = await new Promise((resolve) => {
+              const socket = net.createConnection({ port, host: '127.0.0.1' });
+              const timer = setTimeout(() => { socket.destroy(); resolve(false); }, 1000);
+              socket.on('connect', () => { clearTimeout(timer); socket.destroy(); resolve(true); });
+              socket.on('error', () => { clearTimeout(timer); resolve(false); });
+            });
+            if (isUp) { backendUrl = `http://127.0.0.1:${port}`; break; }
+          } catch { /* continue */ }
+        }
+
+        if (backendUrl) {
+          log.info(`执行对抗性测试（后端: ${backendUrl}）...`);
+          const advResult = await runAdversarialTests(backendUrl, specContent);
+
+          if (advResult.message) {
+            log.info(`对抗性测试：${advResult.message}`);
+          } else if (advResult.pass) {
+            log.ok(`对抗性测试通过（${advResult.tested} 项测试 / ${advResult.passed} 通过）`);
+          } else {
+            const details = advResult.vulnerabilities.slice(0, 5).map(v =>
+              `${v.api}: ${v.test} — ${v.detail}`
+            ).join('\n   ');
+            log.warn(`对抗性测试发现 ${advResult.vulnerabilities.length} 个问题（${advResult.tested} 项测试 / ${advResult.failed} 失败）：\n   ${details}`);
+            // 对抗性测试结果为 warning 级别（不阻断 gate，但显著提示）
+          }
+        } else {
+          log.info('对抗性测试跳过（未检测到运行中的后端）');
+        }
+      } catch (e) {
+        log.warn(`对抗性测试跳过：${e.message.split('\n')[0]}`);
       }
 
       break;
@@ -2109,6 +2164,33 @@ function installGitHook(projectRoot) {
 
 // ─── 入口 ────────────────────────────────────────────────────
 
+// ─── CI ────────────────────────────────────────────────────
+
+function cmdCI(args) {
+  const projectRoot = findProjectRoot();
+  const sub = args[0];
+
+  if (sub === 'setup' || sub === 'init') {
+    const { cmdCISetup } = require('./ci-gen');
+    const withE2E = args.includes('--e2e');
+    console.log('\n生成 CI 配置...\n');
+    cmdCISetup(projectRoot, { withE2E });
+  } else {
+    console.log(`
+spec-copilot ci — CI/CD 自动化
+
+用法:
+  spec-copilot ci setup              生成 GitHub Actions workflow
+  spec-copilot ci setup --e2e        同时生成 E2E 完整测试 workflow
+
+生成的 workflow 会在 PR 提交时自动运行:
+  - gate smoke（构建 + 骨架 + 代码质量）
+  - gate review（覆盖率 + API 契约 + 错误处理）
+  - 评分结果上传为 artifacts
+`);
+  }
+}
+
 function showHelp() {
   console.log(`
 @alenfitz/spec-copilot — 渐进式 Spec 编码框架（多工具统一版）
@@ -2123,6 +2205,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
   npx @alenfitz/spec-copilot scorecard <msg-file>        校验 task commit 自评分卡
   npx @alenfitz/spec-copilot guard <install|status|lock|unlock|check>  代码级护栏
+  npx @alenfitz/spec-copilot ci <setup>                  生成 CI/CD 配置
   npx @alenfitz/spec-copilot doctor                      检查安装状态
   npx @alenfitz/spec-copilot uninstall [--confirm]       移除框架文件
 
@@ -2159,6 +2242,9 @@ switch (cmd) {
     break;
   case 'guard':
     cmdGuard(args.slice(1));
+    break;
+  case 'ci':
+    cmdCI(args.slice(1));
     break;
   case 'doctor':
   case 'check':
