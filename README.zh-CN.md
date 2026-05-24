@@ -118,6 +118,7 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 
 - **自动检测**技术栈（Spring Boot + Vue3、Vite 等）并启动开发服务器
 - **Spec 驱动**路由提取：从 spec.md + 项目 router 文件自动生成测试页面
+- **验收场景驱动**：消费 spec 里的 ACxx 验收矩阵并输出覆盖统计
 - **逐页面检查**：白屏、未捕获 JS 异常、API 连接失败、框架错误遮罩
 - **零配置**适配常见栈，可选 flags：`--headed`、`--base-url`、`--no-e2e`
 
@@ -134,6 +135,14 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 - 检测前端是否把当前登录人、操作人、业务身份写死
 
 这会把“页面看起来做完了，但接口其实调不通”从 review 阶段的问题，前置成 gate 阶段的失败。
+
+### 验收场景覆盖门禁
+
+`smoke` 现在会消费 `spec.md` 中的 `ACxx` 验收场景矩阵，并输出完整覆盖、部分覆盖、未覆盖的统计。
+
+- `happy` 主流程场景没有形成端到端闭环时，会直接阻断 gate
+- `rule/error` 场景会暴露缺失的校验反馈或异常路径证据
+- 目的就是把“spec 写了验收”推进成“gate 真能证明有没有跑到”
 
 ### Guard 代码级护栏（v2.6.0）
 

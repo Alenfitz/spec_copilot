@@ -581,6 +581,163 @@ function resolveRoutesFromProject(projectRoot, specRoutes) {
   return specRoutes;
 }
 
+/**
+ * 从 spec.md 的验收场景矩阵提取 ACxx 场景
+ */
+function extractAcceptanceScenarios(specContent) {
+  const scenarios = [];
+  const seen = new Set();
+  const rowRegex = /^\|\s*(AC\d+)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|\s*([^|\n]+?)\s*\|?\s*$/gm;
+  let m;
+  while ((m = rowRegex.exec(specContent)) !== null) {
+    const id = m[1].trim();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    scenarios.push({
+      id,
+      type: m[2].trim().toLowerCase(),
+      steps: m[3].trim(),
+      expected: m[4].trim(),
+      refs: m[5].split(',').map(s => s.trim()).filter(Boolean),
+    });
+  }
+  return scenarios;
+}
+
+function inferScenarioSignals(scenario) {
+  const text = `${scenario.steps} ${scenario.expected}`;
+  return {
+    needsSearch: /(查询|搜索|筛选|search|filter)/i.test(text),
+    needsPagination: /(分页|下一页|上一页|page\s*\d|第\s*\d+\s*页)/i.test(text),
+    needsFormSubmit: /(新增|新建|创建|录入|提交|保存|编辑)/i.test(text),
+    needsDetail: /(查看详情|详情页|查看|详情|detail)/i.test(text),
+    needsListRefresh: /(列表|刷新|结果|table|grid)/i.test(text),
+    needsErrorFeedback: scenario.type === 'rule' || scenario.type === 'error' || /(报错|错误|提示|校验|拦截|失败|文案)/i.test(text),
+  };
+}
+
+function summarizeAcceptanceCoverage(scenarios, pageResults, apiResults, interactionResults, apiInteractionSummary) {
+  if (!scenarios.length) {
+    return {
+      total: 0,
+      covered: 0,
+      partial: 0,
+      missing: 0,
+      scenarios: [],
+      byType: {},
+      failures: [],
+      warnings: [],
+    };
+  }
+
+  const allInteractions = interactionResults.flatMap(r => r.interactions || []);
+  const lowerRoutes = pageResults.map(p => (p.route || '').toLowerCase());
+  const pagePassCount = pageResults.filter(p => p.pass).length;
+  const apiHealthy = (apiInteractionSummary && apiInteractionSummary.ok > 0) || apiResults.some(a => a.pass);
+  const negativeEvidence =
+    pageResults.some(p => (p.failures || []).some(f => /4xx|校验|提示|失败|错误/.test(f))) ||
+    interactionResults.some(r => (r.failures || []).some(f => /4xx|5xx|校验|失败|错误/.test(f)) || (r.warnings || []).some(w => /400|校验|提示/.test(w))) ||
+    (apiInteractionSummary && (apiInteractionSummary.client4xx > 0 || apiInteractionSummary.server5xx > 0));
+
+  const hasSearchEvidence = allInteractions.some(i => i.type === '搜索' && i.apiTriggered && (!i.apiErrors || i.apiErrors.length === 0));
+  const hasPaginationEvidence = allInteractions.some(i => i.type === '分页' && i.apiTriggered);
+  const hasFormSubmitEvidence = allInteractions.some(i => i.type === '表单提交' && i.apiTriggered);
+  const hasCreateEvidence = allInteractions.some(i => i.type === '新增按钮' && i.exists);
+  const hasDetailEvidence =
+    allInteractions.some(i => i.type === '表格操作' && i.actionCount > 0) ||
+    lowerRoutes.some(route => /detail|info|view|edit|form|\/1$|\/details?/.test(route));
+  const hasListEvidence =
+    allInteractions.some(i => i.type === '搜索' || i.type === '分页') ||
+    lowerRoutes.some(route => /list|index|manage|table|query|search/.test(route)) ||
+    pagePassCount > 0;
+
+  const details = scenarios.map((scenario) => {
+    const signals = inferScenarioSignals(scenario);
+    const evidence = [];
+    const missing = [];
+
+    if (pagePassCount > 0) evidence.push('页面可访问');
+    else missing.push('页面访问证据');
+
+    if (apiHealthy) evidence.push('API 联通');
+    else missing.push('API 联通证据');
+
+    if (signals.needsSearch) {
+      if (hasSearchEvidence) evidence.push('搜索交互');
+      else missing.push('搜索交互');
+    }
+    if (signals.needsPagination) {
+      if (hasPaginationEvidence) evidence.push('分页交互');
+      else missing.push('分页交互');
+    }
+    if (signals.needsFormSubmit) {
+      if (hasFormSubmitEvidence) evidence.push('表单提交');
+      else if (hasCreateEvidence) evidence.push('新增入口存在');
+      else missing.push('表单提交');
+    }
+    if (signals.needsDetail) {
+      if (hasDetailEvidence) evidence.push('详情/行操作');
+      else missing.push('详情/查看交互');
+    }
+    if (signals.needsListRefresh) {
+      if (hasListEvidence) evidence.push('列表交互');
+      else missing.push('列表刷新');
+    }
+    if (signals.needsErrorFeedback) {
+      if (negativeEvidence) evidence.push('异常/校验反馈');
+      else missing.push('异常/校验反馈');
+    }
+
+    let status = 'covered';
+    if (missing.length === 0 && evidence.length === 0) status = 'missing';
+    else if (missing.length > 0 && evidence.length > 0) status = 'partial';
+    else if (missing.length > 0) status = 'missing';
+
+    return {
+      ...scenario,
+      status,
+      evidence,
+      missing,
+    };
+  });
+
+  const byType = {};
+  for (const item of details) {
+    const type = item.type || 'unknown';
+    if (!byType[type]) byType[type] = { total: 0, covered: 0, partial: 0, missing: 0 };
+    byType[type].total += 1;
+    byType[type][item.status] += 1;
+  }
+
+  const covered = details.filter(s => s.status === 'covered').length;
+  const partial = details.filter(s => s.status === 'partial').length;
+  const missing = details.filter(s => s.status === 'missing').length;
+  const failures = [];
+  const warnings = [];
+
+  const happyStats = byType.happy || { total: 0, covered: 0 };
+  if (covered === 0) {
+    failures.push(`验收场景闭环为 0/${details.length}，spec 中的 ACxx 尚未形成 smoke/e2e 可验证证据`);
+  }
+  if (happyStats.total > 0 && happyStats.covered === 0) {
+    failures.push(`happy 场景 0/${happyStats.total} 完整覆盖，核心主流程仍缺少可验证闭环`);
+  }
+  if (missing > 0 && failures.length === 0) {
+    warnings.push(`${missing} 个 AC 场景仍未覆盖：${details.filter(s => s.status === 'missing').slice(0, 5).map(s => s.id).join(', ')}`);
+  }
+
+  return {
+    total: details.length,
+    covered,
+    partial,
+    missing,
+    scenarios: details,
+    byType,
+    failures,
+    warnings,
+  };
+}
+
 // ─── 浏览器检查 ──────────────────────────────────────────────
 
 /**
@@ -1582,9 +1739,10 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       }
     }
 
-    // ── Step 4：从 spec 提取路由 ──
+    // ── Step 4：从 spec 提取路由与验收场景 ──
     let specRoutes = extractSpecRoutes(specContent);
     specRoutes = resolveRoutesFromProject(projectRoot, specRoutes);
+    const acceptanceScenarios = extractAcceptanceScenarios(specContent);
 
     // 过滤掉没有路由的条目
     const testablePages = specRoutes.pages.filter(p => p.route);
@@ -1749,16 +1907,27 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
         paginationTested: interactionResults.some(r => r.interactions.some(i => i.type === '分页')),
         failures: interactionResults.reduce((s, r) => s + r.failures.length, 0),
       };
+      const acceptanceSummary = summarizeAcceptanceCoverage(
+        acceptanceScenarios,
+        pageResults,
+        apiResults,
+        interactionResults,
+        apiInteractionSummary
+      );
 
       return {
         available: true,
-        pass: failedPages.length === 0 && failedApis.filter(a => a.status === 0 || a.status >= 500).length === 0,
+        pass:
+          failedPages.length === 0 &&
+          failedApis.filter(a => a.status === 0 || a.status >= 500).length === 0 &&
+          acceptanceSummary.failures.length === 0,
         skipReason: null,
         pages: pageResults,
         apiResults,
         apiInteractionSummary,
         interactionResults,      // v2.8.0
         interactionSummary,      // v2.8.0
+        acceptanceSummary,       // v3.3.0
         schemaViolations,        // v3.0.0
         screenshotChanges,       // v3.0.0
         consoleErrors: allConsoleErrors,
@@ -1794,4 +1963,5 @@ module.exports = {
   resolvePlaywright,
   extractSpecRoutes,
   resolveRoutesFromProject,
+  extractAcceptanceScenarios,
 };

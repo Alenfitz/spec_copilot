@@ -117,6 +117,7 @@ Playwright-based end-to-end verification — catches "compiles but doesn't work"
 
 - **Auto-detects** tech stack (Spring Boot + Vue3, Vite, etc.) and starts dev servers
 - **Spec-driven** route extraction from spec.md + project router files
+- **Acceptance-driven** ACxx coverage summary from the spec acceptance matrix
 - **Checks per page**: white screen, uncaught JS errors, API failures, framework error overlays
 - **Zero config** for common stacks, optional flags: `--headed`, `--base-url`, `--no-e2e`
 
@@ -133,6 +134,14 @@ The framework now blocks a frequent low-score failure mode: **frontend/backend c
 - Detects hardcoded current-user / operator identity in frontend code
 
 This turns “the UI looks complete but the API cannot actually be called” into a gate failure instead of a review surprise.
+
+### Acceptance Coverage Gate
+
+`smoke` now consumes the `ACxx` acceptance matrix in `spec.md` and reports how many scenarios are fully covered, partially covered, or still missing evidence.
+
+- `happy` scenarios without end-to-end closure are treated as gate failures
+- `rule/error` scenarios show where validation or error-feedback evidence is still missing
+- The goal is to turn "spec has acceptance cases" into "gate can prove whether they were exercised"
 
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 

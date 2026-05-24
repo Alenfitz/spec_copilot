@@ -698,6 +698,13 @@ async function cmdGate(args) {
               if (is.paginationTested) tested.push('分页');
               log.ok(`  交互测试: ${is.totalInteractions} 项交互${tested.length ? `（${tested.join('、')}）` : ''}${is.failures ? ` / ${is.failures} 项失败` : ''}`);
             }
+            if (e2eResult.acceptanceSummary && e2eResult.acceptanceSummary.total > 0) {
+              const ac = e2eResult.acceptanceSummary;
+              log.ok(`  AC 场景覆盖: ${ac.covered}/${ac.total} 完整覆盖${ac.partial ? ` / ${ac.partial} 部分覆盖` : ''}${ac.missing ? ` / ${ac.missing} 未覆盖` : ''}`);
+              for (const w of ac.warnings || []) {
+                log.warn(`  ${w}`);
+              }
+            }
             // v3.0.0: 显示 API Schema 校验结果
             if (e2eResult.schemaViolations && e2eResult.schemaViolations.length > 0) {
               for (const v of e2eResult.schemaViolations) {
@@ -735,6 +742,18 @@ async function cmdGate(args) {
             if (e2eResult.apiInteractionSummary && e2eResult.apiInteractionSummary.total > 0) {
               const ai = e2eResult.apiInteractionSummary;
               details.push(`── API 交互摘要: ${ai.total} 请求（${ai.ok} 正常 / ${ai.client4xx} 4xx / ${ai.server5xx} 5xx / ${ai.nonJson} 非JSON / ${ai.failed} 连接失败）`);
+            }
+            if (e2eResult.acceptanceSummary) {
+              const ac = e2eResult.acceptanceSummary;
+              if (ac.total > 0) {
+                details.push(`── AC 场景覆盖: ${ac.covered}/${ac.total} 完整覆盖 / ${ac.partial} 部分覆盖 / ${ac.missing} 未覆盖`);
+              }
+              for (const f of ac.failures || []) {
+                details.push(`AC Gate: ${f}`);
+              }
+              for (const s of (ac.scenarios || []).filter(item => item.status !== 'covered').slice(0, 6)) {
+                details.push(`${s.id}(${s.type}): 缺少 ${s.missing.join('、')}`);
+              }
             }
             fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`);
           }
