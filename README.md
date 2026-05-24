@@ -168,6 +168,13 @@ This turns “the UI looks complete but the API cannot actually be called” int
 - API coverage checks use `前端调用方` and `后端实现入口` from the spec matrix when available
 - this reduces false positives on frontend/backend matching
 
+### Rule-Check DSL
+
+The spec template now supports a small `RULE-CHECK` YAML block for `Vxx` rules.
+
+- it is a lightweight execution-oriented template, not a full test framework yet
+- `review` validates whether the block is structurally complete and aligned with the referenced `Vxx`
+
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:

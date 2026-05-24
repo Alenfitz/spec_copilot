@@ -169,6 +169,13 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 - 接口覆盖检查会优先使用 `前端调用方` 和 `后端实现入口`
 - 这样能减少前后端匹配中的误报
 
+### Rule-Check DSL
+
+spec 模板现在支持一个轻量的 `RULE-CHECK` YAML 片段来描述 `Vxx` 规则。
+
+- 它目前还不是完整测试框架，但已经是面向执行的结构化模板
+- `review` 会校验这个片段是否完整、是否和对应的 `Vxx` 对齐
+
 ### Guard 代码级护栏（v2.6.0）
 
 AI 工具会无视提示词中的"铁律"。Guard 用 **hash 校验 @ gate 时** 做硬拦截 — AI 可以改文件，但改了过不了 gate：

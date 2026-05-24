@@ -130,6 +130,31 @@ function extractApiCoverageMatrix(specContent) {
   return rows;
 }
 
+function extractRuleCheckBlocks(specContent) {
+  const blocks = [];
+  const regex = /```ya?ml\s+RULE-CHECK:\s*([\s\S]*?)```/g;
+  let m;
+  while ((m = regex.exec(specContent)) !== null) {
+    const body = m[1];
+    const get = (name) => {
+      const mm = body.match(new RegExp(`\\b${name}:\\s*["']?([^\\n"']+)["']?`));
+      return mm ? mm[1].trim() : '';
+    };
+    blocks.push({
+      raw: body,
+      id: get('id'),
+      kind: get('kind'),
+      when: get('when'),
+      left: get('left'),
+      op: get('op'),
+      right: get('right'),
+      success: get('success'),
+      errorMessage: get('error_message'),
+    });
+  }
+  return blocks;
+}
+
 function extractFrontApiCalls(projectRoot) {
   const feRoots = ['frontend/src', 'app/src', 'src']
     .map(r => path.join(projectRoot, r))
@@ -653,7 +678,11 @@ function checkRuleCoverage(projectRoot, specContent) {
     return matches;
   };
 
+  const ruleBlocks = extractRuleCheckBlocks(specContent);
+  const knownKinds = new Set(['required', 'enum', 'compare_datetime', 'state_transition', 'idempotent']);
+
   const results = rules.map((rule) => {
+    const dsl = ruleBlocks.find(block => block.id === rule.id);
     const ruleIdHits = findMatches(rule.id);
     const triggerHits = rule.trigger && rule.trigger !== '-' ? findMatches(rule.trigger) : [];
     const outcomeHits = rule.outcome && rule.outcome !== '-' ? findMatches(rule.outcome.replace(/[`'"]/g, '')) : [];
@@ -676,9 +705,21 @@ function checkRuleCoverage(projectRoot, specContent) {
     if (!verificationDeclared) {
       missing.push('验证方式声明');
     }
+    if (dsl) {
+      if (!knownKinds.has(dsl.kind)) missing.push('RULE-CHECK.kind 非法');
+      if (!dsl.when) missing.push('RULE-CHECK.when');
+      if (!dsl.errorMessage && /异常|错误|文案|拦截/i.test(rule.outcome)) missing.push('RULE-CHECK.error_message');
+      if (dsl.kind === 'compare_datetime' && (!dsl.left || !dsl.op || !dsl.right)) {
+        missing.push('RULE-CHECK.compare_datetime 参数不完整');
+      }
+      if (dsl.kind === 'required' && !dsl.left) {
+        missing.push('RULE-CHECK.required 字段缺失');
+      }
+    }
 
     return {
       ...rule,
+      dsl,
       frontendHits,
       backendHits,
       outcomeEvidence,
@@ -694,6 +735,7 @@ function checkRuleCoverage(projectRoot, specContent) {
     matched: results.filter(r => r.pass).length,
     results,
     missingRules: results.filter(r => !r.pass),
+    dslCount: ruleBlocks.length,
   };
 }
 

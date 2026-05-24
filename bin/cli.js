@@ -1578,7 +1578,7 @@ async function cmdGate(args) {
             if (check.message) {
               log.info(`${check.name}：${check.message}`);
             } else if (check.pass) {
-              log.ok(`业务规则覆盖：${check.matched}/${check.total} 条规则均有代码与验证证据`);
+              log.ok(`业务规则覆盖：${check.matched}/${check.total} 条规则均有代码与验证证据${check.dslCount ? ` / RULE-CHECK ${check.dslCount} 个` : ''}`);
             } else {
               const msgs = check.missingRules.slice(0, 10).map(item =>
                 `${item.id}: 缺少 ${item.missing.join('、')}`

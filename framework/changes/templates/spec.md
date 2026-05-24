@@ -42,6 +42,27 @@
 > 3. `生效层` 为前端/双端时，前端必须有明确落点；为后端/双端时，后端必须有明确落点。
 > 4. `触发点` 与 `错误文案/结果` 应可被 gate 搜索到，否则视为规则未闭环。
 
+### 4.2 规则执行模板（推荐，v3.7+ 可逐步自动消费）
+
+```yaml
+RULE-CHECK:
+  id: V01
+  kind: compare_datetime
+  when: "提交签发"
+  input:
+    left: sign_time
+    op: "<="
+    right: planned_start_time
+  expect:
+    success: false
+    error_message: "签发时间不得晚于计划开工时间"
+```
+
+> 约定：
+> 1. `id` 必须对应已有 `Vxx`。
+> 2. `kind` 先使用统一枚举：`required` / `enum` / `compare_datetime` / `state_transition` / `idempotent`。
+> 3. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
+
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |
 
