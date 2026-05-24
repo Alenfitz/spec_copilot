@@ -1,6 +1,6 @@
 {
   "name": "@alenfitz/spec-copilot",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Spec-Driven Development Framework — one package, six AI coding tools (opencode, Claude Code, Cursor, Windsurf, GitHub Copilot, Cline)",
   "keywords": [
     "ai-coding",
@@ -32,7 +32,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Alenfitz/spec_copilot"
+    "url": "git+https://github.com/Alenfitz/spec_copilot.git"
   },
   "scripts": {
     "build": "node scripts/build.js",

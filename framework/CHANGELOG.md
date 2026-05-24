@@ -4,6 +4,16 @@
 
 ---
 
+## [3.2.1] - 2026-05-24
+
+### 修复
+- **Doctor 仓库自检误报修复**: 在 spec-copilot 框架源码仓库内运行 `doctor` 时，改为执行源码仓库自检，不再误报“未安装 spec_copilot/”
+- **npm 发布元数据修复**: `package.json.repository.url` 改为 npm 推荐的 `git+https://...git` 格式，消除发布规范化警告
+- **README 命令清单对齐**: README / README.zh-CN 的 CLI 命令示例补齐 `sync`、`agents`、`scorecard`、`guard`、`ci`
+
+### 变更
+- **版本描述收敛**: 移除 README 中易过时的功能首发版本标注，改为与当前 `3.2.x` 能力描述保持一致
+
 ## [3.2.0] - 2026-05-24
 
 ### 新增

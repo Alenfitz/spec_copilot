@@ -95,6 +95,10 @@ function pkgRoot() {
   return path.resolve(__dirname, '..');
 }
 
+function isFrameworkRepo(projectRoot) {
+  return path.resolve(projectRoot) === pkgRoot();
+}
+
 function readVersion() {
   try {
     return fs.readFileSync(path.join(pkgRoot(), 'framework', 'VERSION'), 'utf-8').trim();
@@ -1871,12 +1875,43 @@ spec-copilot guard — 代码级护栏（AI 工具绕不过的硬拦截）
 
 function cmdDoctor() {
   const projectRoot = findProjectRoot();
+  const frameworkRepo = isFrameworkRepo(projectRoot);
   log.title('@alenfitz/spec-copilot doctor');
   log.info(`项目根目录: ${projectRoot}`);
   log.info(`框架版本:   ${readVersion()}`);
 
   let issues = 0;
   const scDir = path.join(projectRoot, 'spec_copilot');
+
+  if (frameworkRepo) {
+    log.info('检测模式:   框架源码仓库');
+    log.ok('当前目录是 spec-copilot 框架源码仓库，跳过项目安装态检查');
+
+    const keyFiles = [
+      ['framework/VERSION', '框架版本文件'],
+      ['framework/CHANGELOG.md', '框架变更记录'],
+      ['framework/AGENTS.md.template', 'Prompt 模板'],
+      ['bin/cli.js', 'CLI 入口'],
+      ['README.md', '英文文档'],
+      ['README.zh-CN.md', '中文文档'],
+      ['scripts/build.js', '构建脚本'],
+    ];
+    for (const [rel, label] of keyFiles) {
+      if (fs.existsSync(path.join(projectRoot, rel))) {
+        log.ok(`${label}（${rel}）`);
+      } else {
+        log.err(`缺少 ${label}（${rel}）`);
+        issues++;
+      }
+    }
+
+    if (issues === 0) {
+      log.ok('框架源码仓库自检通过');
+    } else {
+      log.err(`发现 ${issues} 个问题，请先修复源码仓库后再发布`);
+    }
+    return;
+  }
 
   // 检查 spec_copilot/ 目录
   if (fs.existsSync(scDir)) {

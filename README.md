@@ -60,8 +60,13 @@ The framework auto-detects your tool on subsequent commands (`update`, `doctor`,
 ```bash
 npx @alenfitz/spec-copilot install --tool <name>    # Install framework
 npx @alenfitz/spec-copilot update [--force]          # Upgrade framework
+npx @alenfitz/spec-copilot sync [--tool <name>]      # Re-sync adapter files
 npx @alenfitz/spec-copilot gate <name> <phase>       # Phase gate check
 npx @alenfitz/spec-copilot lint <name>               # Spec completeness check
+npx @alenfitz/spec-copilot agents list               # List built-in agent profiles
+npx @alenfitz/spec-copilot scorecard <msg-file>      # Validate task commit self-scorecard
+npx @alenfitz/spec-copilot guard status              # View guardrail status
+npx @alenfitz/spec-copilot ci setup                  # Generate CI/CD config
 npx @alenfitz/spec-copilot doctor                    # Health check
 npx @alenfitz/spec-copilot uninstall --confirm       # Remove framework
 ```
@@ -106,7 +111,7 @@ npx @alenfitz/spec-copilot gate <name> smoke
 | `review` | Smoke sentinel + feature coverage + API contract + contract consistency + dead code + hardcoded identity checks |
 | `archive` | Review sentinel + spec audit conclusion |
 
-### E2E Browser Smoke (v2.3.0+)
+### E2E Browser Smoke
 
 Playwright-based end-to-end verification — catches "compiles but doesn't work" issues:
 
@@ -117,7 +122,9 @@ Playwright-based end-to-end verification — catches "compiles but doesn't work"
 
 Uses system-installed Chrome — no extra installation needed. Just have Chrome on your machine.
 
-### Contract Gate (v3.2.0)
+### Contract Gate
+
+Available in current `3.2.x` releases.
 
 The framework now blocks a frequent low-score failure mode: **frontend/backend contract drift**.
 

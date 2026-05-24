@@ -60,8 +60,13 @@ npx @alenfitz/spec-copilot doctor
 ```bash
 npx @alenfitz/spec-copilot install --tool <name>    # 安装框架
 npx @alenfitz/spec-copilot update [--force]          # 升级框架
+npx @alenfitz/spec-copilot sync [--tool <name>]      # 重新同步适配器文件
 npx @alenfitz/spec-copilot gate <变更名> <phase>      # 阶段门禁检查
 npx @alenfitz/spec-copilot lint <变更名>              # Spec 完整性检查
+npx @alenfitz/spec-copilot agents list               # 查看内置 Agent Profile
+npx @alenfitz/spec-copilot scorecard <msg-file>      # 校验 task commit 自评分卡
+npx @alenfitz/spec-copilot guard status              # 查看护栏状态
+npx @alenfitz/spec-copilot ci setup                  # 生成 CI/CD 配置
 npx @alenfitz/spec-copilot doctor                    # 检查安装状态
 npx @alenfitz/spec-copilot uninstall --confirm       # 移除框架
 ```
@@ -107,7 +112,7 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 | `review` | smoke 哨兵 + 功能点覆盖 + API 契约 + 契约一致性 + 死代码 + 硬编码身份检查 |
 | `archive` | review 哨兵 + spec 审查结论 |
 
-### E2E 浏览器冒烟（v2.3.0+）
+### E2E 浏览器冒烟
 
 基于 Playwright 的端到端浏览器验证 — 抓住"能编译但不能用"的问题：
 
@@ -118,7 +123,9 @@ npx @alenfitz/spec-copilot gate <变更名> smoke
 
 使用系统已安装的 Chrome — 无需额外安装。只要电脑有 Chrome 即可。
 
-### 契约门禁（v3.2.0）
+### 契约门禁
+
+当前 `3.2.x` 版本已内置这组检查。
 
 框架现在会主动拦截一种非常常见的低分问题：**前后端契约漂移**。
 
