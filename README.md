@@ -177,6 +177,7 @@ The spec template now supports a small `RULE-CHECK` YAML block for `Vxx` rules.
 - field-based rules now also need to line up with the API field checklist, so the DSL is no longer detached from the contract
 - field-based rules can now bind `api: APIxx`, allowing the gate to check whether those fields really land in the mapped frontend caller and backend entrypoint
 - `smoke/e2e` now also tries to collect runtime evidence for `RULE-CHECK`; when an AC scenario really hits the bound API but the request fields or error message drift from the spec, the gate will surface it directly
+- `state_transition` and `idempotent` now also have first-pass runtime evidence support; prefer declaring `field/from/to` and `key/repeat` explicitly
 
 ### Guard System (v2.6.0) — Code-Enforced Guardrails
 

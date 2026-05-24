@@ -59,6 +59,34 @@ RULE-CHECK:
     error_message: "签发时间不得晚于计划开工时间"
 ```
 
+```yaml
+RULE-CHECK:
+  id: V02
+  api: API02
+  kind: state_transition
+  when: "提交作废"
+  input:
+    field: status
+    from: issued
+    to: cancelled
+  expect:
+    success: true
+```
+
+```yaml
+RULE-CHECK:
+  id: V03
+  api: API03
+  kind: idempotent
+  when: "重复提交保存"
+  input:
+    key: request_id
+    repeat: 2
+  expect:
+    success: true
+    error_message: "请求重复"
+```
+
 > 约定：
 > 1. `id` 必须对应已有 `Vxx`。
 > 2. 字段型规则（`required` / `enum` / `compare_datetime`）应声明 `api: APIxx`，绑定到 §6.1 / §6.2 的具体接口。
@@ -66,6 +94,7 @@ RULE-CHECK:
 > 4. `expect.error_message` 应与 §4.1 的“错误文案/结果”一致或兼容。
 > 5. `required` / `enum` / `compare_datetime` 中引用的字段，应能在 §6.2 API 字段清单中找到，并能落到绑定接口的前端调用方 / 后端实现入口。
 > 6. 如果希望 `smoke/e2e` 也消费这条规则，应尽量让对应 AC 场景真实触发该 `api: APIxx`，这样 gate 才能收集运行时证据。
+> 7. `state_transition` 建议声明 `field/from/to`；`idempotent` 建议声明 `key/repeat`，这样 review/smoke 才能检查状态迁移和重复请求证据。
 
 ## 5. 数据变更
 | 操作 | 表名 | 字段/索引 | 说明 |

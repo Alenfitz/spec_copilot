@@ -449,6 +449,11 @@ function extractRuleCheckBlocks(specContent) {
       apiId: get('api'),
       kind: get('kind'),
       when: get('when'),
+      field: get('field') || get('left'),
+      from: get('from'),
+      to: get('to'),
+      key: get('key'),
+      repeat: get('repeat'),
       left: get('left'),
       op: get('op'),
       right: get('right'),
@@ -550,6 +555,8 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
     ...interactionResults.flatMap(r => [...(r.failures || []), ...(r.warnings || [])]),
   ];
   const fieldAwareKinds = new Set(['required', 'enum', 'compare_datetime']);
+  const transitionKinds = new Set(['state_transition']);
+  const idempotentKinds = new Set(['idempotent']);
 
   const rules = ruleBlocks.map((rule) => {
     const apiRow = apiCoverage.find(api => api.id === rule.apiId);
@@ -588,6 +595,47 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
         missing.push('运行时请求缺少规则字段');
       }
     }
+    if (transitionKinds.has(rule.kind) && observedCalls.length > 0) {
+      const hasField = observedCalls.some(call =>
+        (rule.field && (call.requestFields.includes(rule.field) || (call.requestBody || '').includes(rule.field)))
+      );
+      const hasTargetState = observedCalls.some(call =>
+        (rule.to && ((call.requestBody || '').includes(rule.to) || (call.responsePreview || '').includes(rule.to)))
+      );
+      if (hasField) evidence.push('运行时请求包含状态字段');
+      else missing.push('运行时请求缺少状态字段');
+      if (hasTargetState) evidence.push('运行时命中目标状态');
+      else warnings.push('未观察到目标状态证据');
+      if (rule.from) {
+        const hasSourceState = observedCalls.some(call =>
+          (call.requestBody || '').includes(rule.from) || (call.responsePreview || '').includes(rule.from)
+        );
+        if (!hasSourceState) {
+          warnings.push('未观察到源状态证据');
+        }
+      }
+    }
+    if (idempotentKinds.has(rule.kind) && observedCalls.length > 0) {
+      const keyCovered = observedCalls.some(call =>
+        (rule.key && (call.requestFields.includes(rule.key) || (call.requestBody || '').includes(rule.key)))
+      );
+      if (keyCovered) {
+        evidence.push('运行时请求包含幂等键');
+      } else {
+        missing.push('运行时请求缺少幂等键');
+      }
+
+      const repeatCount = /^\d+$/.test(rule.repeat || '') ? Number(rule.repeat) : 2;
+      if (observedCalls.length >= repeatCount) {
+        evidence.push(`观察到重复请求(${observedCalls.length}次)`);
+        const successCount = observedCalls.filter(call => call.status >= 200 && call.status < 400).length;
+        if (successCount === 0) {
+          warnings.push('重复请求全部失败，暂无法判断幂等表现');
+        }
+      } else {
+        warnings.push(`未观察到足够的重复请求(${observedCalls.length}/${repeatCount})`);
+      }
+    }
 
     const expectedSuccess = /^(true|false)$/i.test(rule.success) ? rule.success.toLowerCase() === 'true' : null;
     const errorCalls = observedCalls.filter(call => call.status >= 400);
@@ -598,6 +646,9 @@ function summarizeRuleRuntimeEvidence(specContent, pageResults, interactionResul
     }
     if (expectedSuccess === false && observedCalls.length > 0 && errorCalls.length === 0) {
       warnings.push('运行时未触发异常分支');
+    }
+    if ((transitionKinds.has(rule.kind) || idempotentKinds.has(rule.kind)) && observedCalls.length === 0 && rule.apiId) {
+      warnings.push('运行时未触发规则绑定链路');
     }
 
     if (rule.errorMessage) {

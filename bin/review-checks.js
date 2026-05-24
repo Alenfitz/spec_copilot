@@ -146,6 +146,11 @@ function extractRuleCheckBlocks(specContent) {
       kind: get('kind'),
       apiId: get('api'),
       when: get('when'),
+      field: get('field') || get('left'),
+      from: get('from'),
+      to: get('to'),
+      key: get('key'),
+      repeat: get('repeat'),
       left: get('left'),
       op: get('op'),
       right: get('right'),
@@ -760,6 +765,8 @@ function checkRuleCoverage(projectRoot, specContent) {
   const ruleBlocks = extractRuleCheckBlocks(specContent);
   const knownKinds = new Set(['required', 'enum', 'compare_datetime', 'state_transition', 'idempotent']);
   const fieldAwareKinds = new Set(['required', 'enum', 'compare_datetime']);
+  const transitionKinds = new Set(['state_transition']);
+  const idempotentKinds = new Set(['idempotent']);
 
   const results = rules.map((rule) => {
     const dsl = ruleBlocks.find(block => block.id === rule.id);
@@ -796,7 +803,7 @@ function checkRuleCoverage(projectRoot, specContent) {
       if (!knownKinds.has(dsl.kind)) missing.push('RULE-CHECK.kind 非法');
       if (!dsl.when) missing.push('RULE-CHECK.when');
       if (!dsl.errorMessage && /异常|错误|文案|拦截/i.test(rule.outcome)) missing.push('RULE-CHECK.error_message');
-      if (fieldAwareKinds.has(dsl.kind) && !dsl.apiId) {
+      if ((fieldAwareKinds.has(dsl.kind) || transitionKinds.has(dsl.kind) || idempotentKinds.has(dsl.kind)) && !dsl.apiId) {
         missing.push('RULE-CHECK.api 缺少 API 绑定');
       }
       if (dsl.apiId && boundApiRows.length === 0) {
@@ -810,6 +817,15 @@ function checkRuleCoverage(projectRoot, specContent) {
       }
       if (dsl.kind === 'required' && !dsl.left) {
         missing.push('RULE-CHECK.required 字段缺失');
+      }
+      if (dsl.kind === 'state_transition' && (!dsl.field || !dsl.to)) {
+        missing.push('RULE-CHECK.state_transition 参数不完整');
+      }
+      if (dsl.kind === 'idempotent' && !dsl.key) {
+        missing.push('RULE-CHECK.idempotent 缺少幂等键');
+      }
+      if (dsl.kind === 'idempotent' && dsl.repeat && !/^\d+$/.test(dsl.repeat)) {
+        missing.push('RULE-CHECK.idempotent repeat 非法');
       }
       if (dsl.kind === 'required') {
         const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.left);
@@ -827,6 +843,18 @@ function checkRuleCoverage(projectRoot, specContent) {
         const fieldsFound = [dsl.left, dsl.right].every(field => fieldExistsInChecklistRows(fieldChecklistScope, field, true));
         if (!fieldsFound) {
           missing.push('RULE-CHECK.compare_datetime 字段未在 API 字段清单中闭环');
+        }
+      }
+      if (dsl.kind === 'state_transition') {
+        const fieldFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.field, true);
+        if (!fieldFoundInChecklist) {
+          missing.push('RULE-CHECK.state_transition 字段未出现在 API 字段清单');
+        }
+      }
+      if (dsl.kind === 'idempotent') {
+        const keyFoundInChecklist = fieldExistsInChecklistRows(fieldChecklistScope, dsl.key, true);
+        if (!keyFoundInChecklist) {
+          missing.push('RULE-CHECK.idempotent 幂等键未出现在 API 字段清单');
         }
       }
       if (dsl.errorMessage) {
@@ -852,6 +880,27 @@ function checkRuleCoverage(projectRoot, specContent) {
         const allFieldsCovered = fieldRefs.every(field => hasFieldEvidenceInBackend(projectRoot, boundBackendCall, field));
         if (!allFieldsCovered) {
           missing.push('RULE-CHECK.api 后端实现入口缺少规则字段证据');
+        }
+      }
+      if (dsl.apiId && dsl.kind === 'state_transition' && /前端|双端/i.test(rule.layer) && boundFrontCall) {
+        if (!hasFieldEvidenceInFrontend(boundFrontCall, dsl.field) || !boundFrontCall.body.includes(dsl.to)) {
+          missing.push('RULE-CHECK.api 前端调用方缺少状态迁移证据');
+        }
+      }
+      if (dsl.apiId && dsl.kind === 'state_transition' && /后端|双端/i.test(rule.layer) && boundBackendCall) {
+        const backendContent = readSafe(path.join(projectRoot, boundBackendCall.file));
+        if (!hasFieldEvidenceInBackend(projectRoot, boundBackendCall, dsl.field) || !backendContent.includes(dsl.to)) {
+          missing.push('RULE-CHECK.api 后端实现入口缺少状态迁移证据');
+        }
+      }
+      if (dsl.apiId && dsl.kind === 'idempotent' && /前端|双端/i.test(rule.layer) && boundFrontCall) {
+        if (!hasFieldEvidenceInFrontend(boundFrontCall, dsl.key)) {
+          missing.push('RULE-CHECK.api 前端调用方缺少幂等键证据');
+        }
+      }
+      if (dsl.apiId && dsl.kind === 'idempotent' && /后端|双端/i.test(rule.layer) && boundBackendCall) {
+        if (!hasFieldEvidenceInBackend(projectRoot, boundBackendCall, dsl.key)) {
+          missing.push('RULE-CHECK.api 后端实现入口缺少幂等键证据');
         }
       }
       if (dsl.apiId && dsl.errorMessage && /后端|双端/i.test(rule.layer) && boundBackendCall) {
