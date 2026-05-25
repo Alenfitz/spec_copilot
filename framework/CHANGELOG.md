@@ -4,6 +4,38 @@
 
 ---
 
+## [4.0.14] - 2026-05-25
+
+### 发布收尾
+
+#### 删除 README 中失效的 Related Packages / 相关包
+
+`@alenfitz/opencode-copilot` 与 `@alenfitz/spec-driven-dev` 已从 npm 仓库移除，因此 README / README.zh-CN 不再继续展示这两个已失效入口，避免用户点进 404 或误以为仍在维护。
+
+#### 结构化评分 warning-pass 写法彻底统一
+
+延续 v4.0.13 的收尾：
+
+- `CODE_QUALITY`（TypeScript any 泛滥警告）由手写 `log.warn + scoreSignals.push(...)` 统一改为 `passWarn(msg, code)`
+- 现在 warning 但评分视为 pass 的 emission 点全部统一为 `passWarn`
+
+效果：structured scoring 的发信号接口只剩四种稳定形态：
+
+- `passOk`
+- `passWarn`
+- `fail`
+- `skip`
+
+#### 下载与发布口径同步
+
+本版本用于重新发布 npm 包，并同步 GitHub Release 下载入口。
+
+### 测试
+
+测试通过：88 / 88
+
+---
+
 ## [4.0.13] - 2026-05-25
 
 ### 清理与守护
