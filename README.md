@@ -209,11 +209,6 @@ Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, open
 - **Skipped by default**: prompt file (use `--force`)
 - **Never touched**: project-context.md, domain-rules.md, knowledge/, changes/, archives/, custom adapters
 
-## Related Packages
-
-- [`@alenfitz/opencode-copilot`](https://www.npmjs.com/package/@alenfitz/opencode-copilot) — opencode-only version
-- [`@alenfitz/spec-driven-dev`](https://www.npmjs.com/package/@alenfitz/spec-driven-dev) — Claude Code-only version (legacy)
-
 ## License
 
 MIT

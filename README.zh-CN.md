@@ -209,11 +209,6 @@ npx @alenfitz/spec-copilot guard unlock     # 解锁
 - **默认跳过**：提示词文件（使用 `--force` 覆盖）
 - **绝不覆盖**：project-context.md、domain-rules.md、knowledge/、changes/、archives/、自定义栈适配
 
-## 相关包
-
-- [`@alenfitz/opencode-copilot`](https://www.npmjs.com/package/@alenfitz/opencode-copilot) — opencode 专属版
-- [`@alenfitz/spec-driven-dev`](https://www.npmjs.com/package/@alenfitz/spec-driven-dev) — Claude Code 专属版（旧版）
-
 ## License
 
 MIT
