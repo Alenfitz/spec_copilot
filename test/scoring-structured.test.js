@@ -33,7 +33,16 @@ function runGate(projectRoot, name, phase) {
   }
 }
 
-function setupMinimalProject(dir) {
+function setupMinimalProject(dir, options = {}) {
+  const {
+    logMd = `# Log
+## 时间线
+| 时间 | 阶段 | 事件 | 备注 |
+| 2026-05-25 | smoke | 冒烟测试通过 ✓ | mock |
+`,
+    withSmokeSentinel = true,
+  } = options;
+
   // 装框架
   execSync(`node "${CLI}" install --tool claude-code`, { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
   // 建一个能进 review 的最小 spec
@@ -53,13 +62,11 @@ test
 | Task | 状态 |
 | T01 | done |
 `);
-  fs.writeFileSync(path.join(changeDir, 'log.md'), `# Log
-## 时间线
-| 时间 | 阶段 | 事件 | 备注 |
-| 2026-05-25 | smoke | 冒烟测试通过 ✓ | mock |
-`);
-  // 假装跑过 smoke
-  fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), '{}');
+  fs.writeFileSync(path.join(changeDir, 'log.md'), logMd);
+  if (withSmokeSentinel) {
+    // 假装跑过 smoke
+    fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), '{}');
+  }
 }
 
 test('scoring: 极简 spec 的 review gate 输出含 ⊝ 跳过标记', () => {
@@ -110,5 +117,22 @@ test('scoring: 输出 .gate-review-score.json 文件含 breakdown', () => {
     assert.strictEqual(typeof data.objectiveScore, 'number');
     assert.ok(Array.isArray(data.breakdown));
     assert.ok(data.breakdown.length > 0);
+  } finally { cleanup(dir); }
+});
+
+test('scoring: 同一 code 先 pass 后 fail 时应以 fail 为准', () => {
+  const dir = mkTmp();
+  try {
+    setupMinimalProject(dir, {
+      logMd: `# Log
+## 时间线
+| 时间 | 阶段 | 事件 | 备注 |
+| 2026-05-25 | review | 仅创建了 review 记录 | mock |
+`,
+      withSmokeSentinel: true,
+    });
+    const out = runGate(dir, 'minimal', 'review');
+    assert.ok(/❌ smoke 哨兵 \(\+0\/8\)/.test(out), `expected smoke sentinel to fail, got tail:\n${out.slice(-800)}`);
+    assert.ok(/log\.md 无冒烟通过记录/.test(out), `expected smoke log failure, got tail:\n${out.slice(-800)}`);
   } finally { cleanup(dir); }
 });

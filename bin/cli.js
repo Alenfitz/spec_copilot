@@ -651,20 +651,20 @@ async function cmdGate(args) {
         const buildResults = checkBuildable(projectRoot);
         if (buildResults.frontend) {
           if (buildResults.frontend.pass) {
-            log.ok(`前端构建成功（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）`);
+            passOk(`前端构建成功（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）`, 'BUILD');
           } else {
-            fail(`前端构建失败（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）：\n   ${buildResults.frontend.error}`);
+            fail(`前端构建失败（${buildResults.frontend.cmd} @ ${buildResults.frontend.dir}）：\n   ${buildResults.frontend.error}`, 'BUILD');
           }
         }
         if (buildResults.backend) {
           if (buildResults.backend.pass) {
-            log.ok(`后端构建成功（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）`);
+            passOk(`后端构建成功（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）`, 'BUILD');
           } else {
-            fail(`后端构建失败（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）：\n   ${buildResults.backend.error}`);
+            fail(`后端构建失败（${buildResults.backend.cmd} @ ${buildResults.backend.dir}）：\n   ${buildResults.backend.error}`, 'BUILD');
           }
         }
         if (!buildResults.frontend && !buildResults.backend) {
-          log.warn('未检测到可构建项目（无 package.json 或 pom.xml）');
+          skip('未检测到可构建项目（无 package.json 或 pom.xml）', 'BUILD');
         }
       } catch (e) {
         log.warn(`构建验证跳过：${e.message.split('\n')[0]}`);
@@ -675,9 +675,11 @@ async function cmdGate(args) {
         const skeletonResult = detectSkeletonComponents(projectRoot);
         if (skeletonResult.skeletons.length > 0) {
           const details = skeletonResult.skeletons.map(s => `${s.file}: ${s.reason}`).join('\n   ');
-          fail(`骨架组件检测命中（${skeletonResult.skeletons.length}/${skeletonResult.total} 个组件为骨架）：\n   ${details}\n   ⚠️ 骨架组件 = 未完成。必须实现真实交互后才能通过 smoke`);
+          fail(`骨架组件检测命中（${skeletonResult.skeletons.length}/${skeletonResult.total} 个组件为骨架）：\n   ${details}\n   ⚠️ 骨架组件 = 未完成。必须实现真实交互后才能通过 smoke`, 'SKELETON');
         } else if (skeletonResult.total > 0) {
-          log.ok(`骨架组件检测：${skeletonResult.total} 个组件均有实质内容`);
+          passOk(`骨架组件检测：${skeletonResult.total} 个组件均有实质内容`, 'SKELETON');
+        } else {
+          skip('骨架组件检测：未检测到前端组件，跳过', 'SKELETON');
         }
       } catch (e) {
         log.warn(`骨架组件检测跳过：${e.message.split('\n')[0]}`);
@@ -691,8 +693,11 @@ async function cmdGate(args) {
             `${a.file}: ${a.anyCount} 处 any / ${a.lineCount} 行（${a.ratio}%）`
           ).join('\n   ');
           log.warn(`TypeScript any 泛滥警告（全局 ${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%）：\n   ${details}`);
+          scoreSignals.push({ code: 'CODE_QUALITY', status: 'pass', message: `TypeScript any 泛滥警告（${anyResult.totalAnys}/${anyResult.totalLines}）` });
         } else if (anyResult.totalLines > 0) {
-          log.ok(`TypeScript any 检测：${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%`);
+          passOk(`TypeScript any 检测：${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%`, 'CODE_QUALITY');
+        } else {
+          skip('TypeScript any 检测：未检测到前端源码，跳过', 'CODE_QUALITY');
         }
       } catch (e) {
         log.warn(`any 泛滥检测跳过：${e.message.split('\n')[0]}`);
@@ -709,9 +714,9 @@ async function cmdGate(args) {
             if (item.nonSnakeBe.length > 0) issues.push(`后端非 snake_case [${item.nonSnakeBe.join(', ')}]`);
             return `${item.method} ${item.path} :: ${item.frontFile}#${item.frontFn} ↔ ${item.backFile}#${item.backFn} — ${issues.join(' / ')}`;
           }).join('\n   ');
-          fail(`前后端契约一致性检查失败（${contractResult.mismatches.length}/${contractResult.checked} 个 API 不一致）：\n   ${details}`);
+          fail(`前后端契约一致性检查失败（${contractResult.mismatches.length}/${contractResult.checked} 个 API 不一致）：\n   ${details}`, 'CONTRACT_CONSISTENCY');
         } else if (contractResult.checked > 0) {
-          log.ok(`前后端契约一致性：${contractResult.checked} 个 API 检查通过`);
+          passOk(`前后端契约一致性：${contractResult.checked} 个 API 检查通过`, 'CONTRACT_CONSISTENCY');
         }
       } catch (e) {
         log.warn(`前后端契约一致性检查跳过：${e.message.split('\n')[0]}`);
@@ -752,14 +757,27 @@ async function cmdGate(args) {
 
           if (!e2eResult.available) {
             log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+            skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
+            skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+            skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
             if (e2eResult.installHint) log.info(`  ${e2eResult.installHint}`);
           } else if (e2eResult.startupError) {
-            fail(`E2E 服务器启动失败：${e2eResult.startupError}`);
+            fail(`E2E 服务器启动失败：${e2eResult.startupError}`, 'E2E_PAGE');
+            skip(`API 连通：E2E 服务器启动失败，未完成验证`, 'API_CONNECTIVITY');
+            skip(`交互测试：E2E 服务器启动失败，未完成验证`, 'INTERACTION_TEST');
           } else if (e2eResult.skipReason) {
             log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+            skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
+            skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+            skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
           } else if (e2eResult.pass) {
             const s = e2eResult.summary;
-            log.ok(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`);
+            passOk(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`, 'E2E_PAGE');
+            if (s.totalApis > 0) {
+              passOk(`API 连通：${s.passedApis}/${s.totalApis} API 正常`, 'API_CONNECTIVITY');
+            } else {
+              skip('API 连通：spec / 页面未提供可验证 API，跳过', 'API_CONNECTIVITY');
+            }
             // v2.7.0: 显示 API 交互摘要
             if (e2eResult.apiInteractionSummary && e2eResult.apiInteractionSummary.total > 0) {
               const ai = e2eResult.apiInteractionSummary;
@@ -772,6 +790,9 @@ async function cmdGate(args) {
               if (is.searchTested) tested.push('搜索');
               if (is.paginationTested) tested.push('分页');
               log.ok(`  交互测试: ${is.totalInteractions} 项交互${tested.length ? `（${tested.join('、')}）` : ''}${is.failures ? ` / ${is.failures} 项失败` : ''}`);
+              passOk(`交互测试：${is.totalInteractions} 项交互已验证`, 'INTERACTION_TEST');
+            } else {
+              skip('交互测试：未检测到可执行交互，跳过', 'INTERACTION_TEST');
             }
             if (e2eResult.acceptanceSummary && e2eResult.acceptanceSummary.total > 0) {
               const ac = e2eResult.acceptanceSummary;
@@ -858,13 +879,44 @@ async function cmdGate(args) {
                 details.push(`RULE-CHECK Warn: ${w}`);
               }
             }
-            fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`);
+            fail(`E2E 浏览器冒烟失败（${failedPages.length} 页面异常${failedApis.length > 0 ? ` / ${failedApis.length} API 失败` : ''}）：\n   ${details.slice(0, 18).join('\n   ')}${details.length > 18 ? `\n   ... 还有 ${details.length - 18} 项` : ''}`, 'E2E_PAGE');
+            if (
+              failedApis.length > 0 ||
+              (e2eResult.apiInteractionSummary && (
+                e2eResult.apiInteractionSummary.client4xx > 0 ||
+                e2eResult.apiInteractionSummary.server5xx > 0 ||
+                e2eResult.apiInteractionSummary.nonJson > 0 ||
+                e2eResult.apiInteractionSummary.failed > 0
+              ))
+            ) {
+              fail('API 连通失败：E2E 期间检测到 4xx/5xx/非 JSON/连接失败', 'API_CONNECTIVITY');
+            } else if ((e2eResult.summary && e2eResult.summary.totalApis > 0) || (e2eResult.apiInteractionSummary && e2eResult.apiInteractionSummary.total > 0)) {
+              passOk('API 连通：未检测到致命接口失败', 'API_CONNECTIVITY');
+            } else {
+              skip('API 连通：本次 E2E 未覆盖可判定接口，跳过', 'API_CONNECTIVITY');
+            }
+
+            if (e2eResult.interactionSummary && e2eResult.interactionSummary.totalInteractions > 0) {
+              if (e2eResult.interactionSummary.failures > 0) {
+                fail(`交互测试失败：${e2eResult.interactionSummary.failures} 项交互异常`, 'INTERACTION_TEST');
+              } else {
+                passOk(`交互测试：${e2eResult.interactionSummary.totalInteractions} 项交互通过`, 'INTERACTION_TEST');
+              }
+            } else {
+              skip('交互测试：未检测到可执行交互，跳过', 'INTERACTION_TEST');
+            }
           }
         } catch (e) {
           log.warn(`E2E 浏览器冒烟跳过：${e.message.split('\n')[0]}`);
+          skip(`E2E 页面：${e.message.split('\n')[0]}`, 'E2E_PAGE');
+          skip(`API 连通：${e.message.split('\n')[0]}`, 'API_CONNECTIVITY');
+          skip(`交互测试：${e.message.split('\n')[0]}`, 'INTERACTION_TEST');
         }
       } else {
         log.info('E2E 浏览器冒烟已通过 --no-e2e 跳过');
+        skip('E2E 页面：已通过 --no-e2e 跳过', 'E2E_PAGE');
+        skip('API 连通：已通过 --no-e2e 跳过', 'API_CONNECTIVITY');
+        skip('交互测试：已通过 --no-e2e 跳过', 'INTERACTION_TEST');
       }
 
       break;
@@ -876,22 +928,22 @@ async function cmdGate(args) {
         try {
           const smokeData = JSON.parse(fs.readFileSync(smokeSentinel, 'utf-8'));
           const ageMin = Math.round((Date.now() - smokeData.timestamp) / 60000);
-          log.ok(`smoke gate 哨兵有效（${ageMin} 分钟前通过）`);
+          passOk(`smoke gate 哨兵有效（${ageMin} 分钟前通过）`, 'SMOKE_SENTINEL');
         } catch {
-          log.ok('smoke gate 哨兵有效');
+          passOk('smoke gate 哨兵有效', 'SMOKE_SENTINEL');
         }
       } else {
         log.warn('未检测到 smoke gate 哨兵（.gate-smoke-passed）— 建议先运行 `gate <name> smoke`');
       }
 
       if (!fs.existsSync(logPath)) {
-        fail('log.md 不存在');
+        fail('log.md 不存在', 'SMOKE_SENTINEL');
       } else {
         const logContent = fs.readFileSync(logPath, 'utf-8');
         if (/smoke.*通过|冒烟.*通过|smoke.*✓/i.test(logContent)) {
-          log.ok('log.md 含冒烟通过记录');
+          passOk('log.md 含冒烟通过记录', 'SMOKE_SENTINEL');
         } else {
-          fail('log.md 无冒烟通过记录 — 请先运行 /spec:smoke');
+          fail('log.md 无冒烟通过记录 — 请先运行 /spec:smoke', 'SMOKE_SENTINEL');
         }
       }
       if (fs.existsSync(tasksPath)) {
@@ -1048,9 +1100,9 @@ async function cmdGate(args) {
           }
 
           if (deadFiles.length > 0) {
-            fail(`前端死代码检测命中（文件存在但从未被 import）：\n   ${deadFiles.slice(0, 15).join('\n   ')}${deadFiles.length > 15 ? `\n   ... 还有 ${deadFiles.length - 15} 个` : ''}\n   ⚠️ 这些组件不会出现在任何用户路径上 = 等同未实现`);
+            fail(`前端死代码检测命中（文件存在但从未被 import）：\n   ${deadFiles.slice(0, 15).join('\n   ')}${deadFiles.length > 15 ? `\n   ... 还有 ${deadFiles.length - 15} 个` : ''}\n   ⚠️ 这些组件不会出现在任何用户路径上 = 等同未实现`, 'DEAD_CODE');
           } else if (candidates.length > 0) {
-            log.ok(`前端死代码检测：${candidates.length} 个组件均被引用`);
+            passOk(`前端死代码检测：${candidates.length} 个组件均被引用`, 'DEAD_CODE');
           }
         }
       } catch (e) {
@@ -1219,9 +1271,9 @@ async function cmdGate(args) {
           }
 
           if (feFailures.length > 0) {
-            fail(`前端严格检查命中（${feFailures.length} 项）：\n   ${feFailures.slice(0, 20).join('\n   ')}${feFailures.length > 20 ? `\n   ... 还有 ${feFailures.length - 20} 项` : ''}`);
+            fail(`前端严格检查命中（${feFailures.length} 项）：\n   ${feFailures.slice(0, 20).join('\n   ')}${feFailures.length > 20 ? `\n   ... 还有 ${feFailures.length - 20} 项` : ''}`, 'FRONTEND_STRICT');
           } else {
-            log.ok('前端严格检查：clean（无 stub handler / 路由覆盖完整 / dialog 挂载完整 / API 全覆盖）');
+            passOk('前端严格检查：clean（无 stub handler / 路由覆盖完整 / dialog 挂载完整 / API 全覆盖）', 'FRONTEND_STRICT');
           }
         }
       } catch (e) {
@@ -1506,11 +1558,12 @@ async function cmdGate(args) {
             const actualPctNum = featureMatched / featurePointIds.length * 100;
             const delta = Math.abs(selfPct - actualPctNum);
             if (delta > 30) {
-              fail(`校准差超标：自评覆盖率 ${selfPct.toFixed(1)}%，实测 ${actualPctNum.toFixed(1)}%，偏差 ${delta.toFixed(1)}% > 30% 红线 — 模型自我评估严重失准`);
+              fail(`校准差超标：自评覆盖率 ${selfPct.toFixed(1)}%，实测 ${actualPctNum.toFixed(1)}%，偏差 ${delta.toFixed(1)}% > 30% 红线 — 模型自我评估严重失准`, 'CALIBRATION');
             } else if (delta > 10) {
               log.warn(`校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）`);
+              scoreSignals.push({ code: 'CALIBRATION', status: 'pass', message: `校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）` });
             } else {
-              log.ok(`校准差正常：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%`);
+              passOk(`校准差正常：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%`, 'CALIBRATION');
             }
           } catch {}
         }
@@ -1550,7 +1603,7 @@ async function cmdGate(args) {
 
           if (check.name === '前后端契约一致性') {
             if (check.pass) {
-              log.ok(`前后端契约一致性：${check.checked} 个 API 检查通过`);
+              passOk(`前后端契约一致性：${check.checked} 个 API 检查通过`, 'CONTRACT_CONSISTENCY');
             } else {
               const msgs = check.mismatches.map(item => {
                 const parts = [];
@@ -1559,7 +1612,7 @@ async function cmdGate(args) {
                 if (item.nonSnakeBe.length > 0) parts.push(`后端非 snake_case [${item.nonSnakeBe.join(', ')}]`);
                 return `${item.method} ${item.path}: ${parts.join(' / ')}`;
               });
-              fail(`前后端契约一致性失败：\n   ${msgs.join('\n   ')}`);
+              fail(`前后端契约一致性失败：\n   ${msgs.join('\n   ')}`, 'CONTRACT_CONSISTENCY');
             }
           }
 
@@ -1734,12 +1787,24 @@ async function cmdGate(args) {
 
       if (phase === 'smoke') {
         scoreItems = [
-          { name: '构建', weight: 15, failPatterns: [/构建失败/] },
-          { name: '骨架组件', weight: 15, failPatterns: [/骨架组件/] },
-          { name: 'E2E 页面', weight: 20, failPatterns: [/E2E.*失败/, /浏览器冒烟失败/, /白屏/, /框架错误/] },
-          { name: 'API 连通', weight: 20, failPatterns: [/API.*失败/, /API.*4xx/, /API.*5xx/, /API.*非.*JSON/, /连接失败/] },
-          { name: '交互测试', weight: 15, failPatterns: [/表单提交/, /搜索.*未触发/, /分页.*API.*报错/] },
-          { name: '代码质量', weight: 15, failPatterns: [/any.*泛滥/, /TypeScript any/] },
+          { name: '构建', code: 'BUILD', weight: 15,
+            failPatterns: [/构建失败/],
+            skipPatterns: [/未检测到可构建项目/] },
+          { name: '骨架组件', code: 'SKELETON', weight: 15,
+            failPatterns: [/骨架组件/],
+            skipPatterns: [/未检测到前端组件/] },
+          { name: 'E2E 页面', code: 'E2E_PAGE', weight: 20,
+            failPatterns: [/E2E.*失败/, /浏览器冒烟失败/, /白屏/, /框架错误/],
+            skipPatterns: [/E2E.*跳过/, /--no-e2e/] },
+          { name: 'API 连通', code: 'API_CONNECTIVITY', weight: 20,
+            failPatterns: [/API.*失败/, /API.*4xx/, /API.*5xx/, /API.*非.*JSON/, /连接失败/],
+            skipPatterns: [/API 连通：.*跳过/, /API 连通：spec.*未提供/, /API 连通：本次 E2E 未覆盖/] },
+          { name: '交互测试', code: 'INTERACTION_TEST', weight: 15,
+            failPatterns: [/表单提交/, /搜索.*未触发/, /分页.*API.*报错/, /交互测试失败/],
+            skipPatterns: [/交互测试：.*跳过/, /交互测试：未检测到可执行交互/] },
+          { name: '代码质量', code: 'CODE_QUALITY', weight: 15,
+            failPatterns: [/any.*泛滥/, /TypeScript any/],
+            skipPatterns: [/TypeScript any 检测：未检测到前端源码/] },
         ];
       } else {
         // v4.0.11: 每个检查项有稳定的 code，评分层优先按 code 匹配 structured signal
@@ -1784,8 +1849,12 @@ async function cmdGate(args) {
        */
       const resolveStatus = (item) => {
         // Priority 1: 结构化 signal
-        const sig = item.code ? scoreSignals.find(s => s.code === item.code) : null;
-        if (sig) return sig.status; // pass | fail | skip
+        const signals = item.code ? scoreSignals.filter(s => s.code === item.code) : [];
+        if (signals.length > 0) {
+          if (signals.some(s => s.status === 'fail')) return 'fail';
+          if (signals.some(s => s.status === 'pass')) return 'pass';
+          if (signals.some(s => s.status === 'skip')) return 'skip';
+        }
 
         // Priority 2: 正则兜底
         const failedByRegex = item.failPatterns && failReasons.some(r => item.failPatterns.some(p => p.test(r)));
@@ -1855,7 +1924,8 @@ async function cmdGate(args) {
           phase, objectiveScore, selfScore, timestamp: Date.now(),
           breakdown: scoreItems.map(s => ({
             name: s.name, weight: s.weight,
-            passed: !failReasons.some(r => s.failPatterns.some(p => p.test(r))),
+            status: resolveStatus(s),
+            passed: resolveStatus(s) === 'pass',
           })),
         }, null, 2) + '\n');
       } catch { /* 写入失败不影响 */ }

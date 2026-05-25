@@ -4,6 +4,48 @@
 
 ---
 
+## [4.0.12] - 2026-05-25
+
+### 工程加固延伸 — smoke 阶段全面结构化 + 多信号合并
+
+延续 v4.0.11 的结构化评分迁移：
+
+#### Smoke 阶段评分全面 code 化
+
+v4.0.11 只迁移了 review 阶段的 12 个评分项，smoke 阶段（构建 / 骨架 / E2E / API 连通 / 交互 / 代码质量）还在用纯正则匹配。本版本补齐：
+
+- 6 个 smoke 评分项均加上稳定 code（`BUILD` / `SKELETON` / `E2E_PAGE` / `API_CONNECTIVITY` / `INTERACTION_TEST` / `CODE_QUALITY`）
+- 每个 emission 点统一改用 `passOk(msg, code)` / `fail(msg, code)` / `skip(msg, code)`
+- 新增 skip 路径：未检测到可构建项目 / 未检测到前端组件 / 未检测到前端源码 / spec 未提供可验证 API / E2E 跳过时的 cascade skip
+
+#### resolveStatus 多信号合并
+
+同一 code 可能 emit 多次（如 `SMOKE_SENTINEL` 既由 `.gate-smoke-passed` 哨兵 emit 又由 `log.md` 检查 emit）。新优先级规则：
+
+```
+fail > pass > skip
+```
+
+即任一 emission 为 fail → 该项失败；否则任一为 pass → 通过；否则按 skip 跳过。修复 v4.0.11 在多 signal 场景下 "最先匹配的获胜" 的脆弱行为。
+
+#### --no-e2e 不再误伤 smoke 评分
+
+之前 `--no-e2e` 跳过 E2E 时，API 连通 / 交互测试仍按 "未失败 = 通过" 加分。现在 cascade skip：E2E 跳过 → API 连通 / 交互测试也明确 skip，按剩余项归一化。
+
+#### .gate-{phase}-score.json 输出增强
+
+`breakdown[].status` 字段加入：`'pass' | 'fail' | 'skip'`，方便外部工具消费。
+
+### 测试
+
+新增：
+- `test/scoring-structured.test.js`: "同一 code 先 pass 后 fail 时应以 fail 为准"
+- `test/smoke-scoring-structured.test.js`: 2 个测试守护 smoke 阶段 skip 路径 + breakdown.status 字段
+
+总测试数：83 → 86
+
+---
+
 ## [4.0.11] - 2026-05-25
 
 ### 工程加固（地基 + 测试守护 + 用户认知）
