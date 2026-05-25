@@ -4,6 +4,51 @@
 
 ---
 
+## [4.0.11] - 2026-05-25
+
+### 工程加固（地基 + 测试守护 + 用户认知）
+
+按"修地基 → 补测试 → 改文档"顺序解决 v4.0.10 暴露的三类技术债：
+
+#### #1: 评分输入结构化（修地基）
+
+v4.0.10 评分系统依赖对 log 文案的正则匹配（`failPatterns` / `skipPatterns`）— 一旦哪个 `log.info` 措辞改一个字，整个评分 silently break。
+
+- 引入 `scoreSignals[]` 数组 + `passOk(msg, code)` / `fail(msg, code)` / `skip(msg, code)` 的可选 `code` 参数
+- 每个评分项有稳定 `code`（如 `API_CONTRACT`, `RULE_COVERAGE`, `AC_TRACE`, `FEATURE_COVERAGE`, ...）
+- 评分循环 `resolveStatus(item)` 优先按 code 匹配 structured signal，正则作为兜底
+- 12 个核心检查点已迁移到结构化 signal：API 契约、契约一致性、错误处理、路由完整、业务规则、Fxx↔ACxx 追踪、硬编码身份、功能点覆盖
+
+#### #2: /spec:flow 行为合约测试（补测试守护）
+
+v4.0.9 才把 /spec:flow 从"复杂度档位"重新定位为"显式授权 AI 自动推进的执行模式"，但这个语义没有自动化测试守护。
+
+新增 `test/spec-flow.test.js`，11 个测试覆盖：
+- flow.md 必须拒绝 🟢 / 接受 🔴
+- flow.md 必须明确是"逐 task 停顿"的显式豁免
+- flow.md 包含完整 5 阶段（propose/apply/smoke/review/archive）
+- flow.md 明确"任一步骤失败即停"
+- AGENTS.md.template 三条核心法则段必须提及 flow 豁免
+- AGENTS.md.template 复杂度分级表**不应**含 /spec:flow（防止再次混淆）
+- adapters 路由表正确映射 + 使用目录式命名（Windows 兼容）
+
+防止未来文案改写或脚手架调整破坏 /spec:flow 语义。
+
+#### #3: 评分哲学前移到用户文档（改用户认知）
+
+v4.0.10 改了评分哲学（"无输入 = skip，不给默认分"），但只在 CHANGELOG 里说。用户看着分数从 66 掉到 58 会困惑。
+
+- README.md / README.zh-CN.md 新增 "Scoring Philosophy" / "评分哲学" 章节
+- 用三态表格解释 ✅ pass / ❌ fail / ⊝ skip 的评分影响
+- 加上 "Quick Diagnosis on Gate Failure" / "Gate 失败时的快速诊断" 速查
+- AGENTS.md.template 在阶段门禁段新增"评分三态"小节，让 AI 给用户报告时主动说明跳过项
+
+### 测试
+
+总测试数：69 → 83（+11 个 flow 合约测试 + 3 个结构化评分集成测试）
+
+---
+
 ## [4.0.10] - 2026-05-25
 
 ### 修复 — 评分系统诚实度

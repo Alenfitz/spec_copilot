@@ -150,6 +150,31 @@ Uses system-installed Chrome — no extra installation needed. Just have Chrome 
 - Detects hardcoded current-user / operator identity in frontend code
 - Catches "UI looks complete but the API cannot actually be called" before it becomes a production issue
 
+### Scoring Philosophy (v4.0.10)
+
+After `smoke` / `review`, you get `📊 客观评分: X/100`. **This score reflects the quality of what your spec covers, not how complete your feature is.**
+
+Each check has three states:
+
+| State | Meaning | Effect on score |
+|-------|---------|----------------|
+| ✅ pass | Check passed | Added to numerator and denominator |
+| ❌ fail | Real issue found | 0 added to numerator (still counted in denominator) |
+| ⊝ skip | spec missing the required input / env precondition absent | **Excluded from total** — neither rewards nor penalizes, score normalized to remaining items |
+
+Example: if your spec has no §6.1 API coverage matrix, the API contract check becomes ⊝ skip — its 20 points neither reward nor penalize, only other items are evaluated.
+
+> ⚠️ Implication: **the more complete your spec, the more your score reflects reality.** An early-stage spec might show "60/100 with 6 skips" — that's only evaluating 4 items. A complete spec with 0 skips is what tells you the truth.
+
+### Quick Diagnosis on Gate Failure
+
+- ❌ smoke sentinel → run `gate <name> smoke` first
+- ❌ Error handling missing → frontend API calls without catch; add try/catch
+- ❌ Dead code → file exists but never imported; either delete or register in router
+- ❌ Hardcoded business identity → frontend hardcodes operator names; inject from auth session
+- ❌ API contract mismatch → check §6.1 matrix has function-level `frontendCaller` / `backendEntry`
+- ⊝ Acceptance trace / Rule coverage → spec missing ACxx/Vxx matrix; **does not block gate**, but fewer skips = more trustworthy score
+
 ### Guard System — Code-Enforced Guardrails
 
 AI tools ignore prompt-based rules. Guard uses **hash verification at gate time** — AI can modify files, but modified files fail the gate:
