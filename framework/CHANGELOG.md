@@ -4,6 +4,36 @@
 
 ---
 
+## [4.0.13] - 2026-05-25
+
+### 清理与守护
+
+延续 v4.0.12 的结构化评分迁移，做收尾清理：
+
+#### 抽出 `passWarn(msg, code)` helper
+
+之前有 3 处 "log.warn + 手动 push pass signal" 的样板代码（TypeScript any 警告 / 校准差 10-30% 警告 / 错误处理 < 50% 警告）。统一抽成 `passWarn` 函数：warning 级别输出 + 评分系统视为 pass。
+
+效果：emission 点写法统一为 `passOk` / `passWarn` / `fail` / `skip`，再无手写 push 的脆弱代码。
+
+#### 硬编码业务身份检测补 `IDENTITY` code
+
+v4.0.12 漏掉了这一处迁移（`log.ok('硬编码业务身份检测：clean')` 和对应 fail 没传 code）。这次补齐，IDENTITY 现在完全走 structured signal。
+
+#### .gate-{phase}-score.json 性能与可读性
+
+之前 breakdown 生成对每个 item 调用 `resolveStatus(s)` 两次（一次给 status、一次给 passed）。提取到 `scoreBreakdown` 局部变量，单次计算复用。
+
+### 测试
+
+新增：
+- `test/scoring-structured.test.js`: "review breakdown 应保留 warning 级 pass 的 status" — 守护 `passWarn` 写入正确状态
+- `test/smoke-scoring-structured.test.js`: "smoke breakdown 不应误带 review-only IDENTITY 项" — 守护两阶段评分项不串
+
+总测试数：86 → 88
+
+---
+
 ## [4.0.12] - 2026-05-25
 
 ### 工程加固延伸 — smoke 阶段全面结构化 + 多信号合并

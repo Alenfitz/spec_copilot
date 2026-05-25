@@ -575,6 +575,10 @@ async function cmdGate(args) {
     log.ok(msg);
     if (code) scoreSignals.push({ code, status: 'pass', message: msg });
   };
+  const passWarn = (msg, code) => {
+    log.warn(msg);
+    if (code) scoreSignals.push({ code, status: 'pass', message: msg });
+  };
 
   const specPath = path.join(changeDir, 'spec.md');
   const tasksPath = path.join(changeDir, 'tasks.md');
@@ -692,8 +696,7 @@ async function cmdGate(args) {
           const details = anyResult.abusers.slice(0, 8).map(a =>
             `${a.file}: ${a.anyCount} 处 any / ${a.lineCount} 行（${a.ratio}%）`
           ).join('\n   ');
-          log.warn(`TypeScript any 泛滥警告（全局 ${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%）：\n   ${details}`);
-          scoreSignals.push({ code: 'CODE_QUALITY', status: 'pass', message: `TypeScript any 泛滥警告（${anyResult.totalAnys}/${anyResult.totalLines}）` });
+          passWarn(`TypeScript any 泛滥警告（全局 ${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%）：\n   ${details}`, 'CODE_QUALITY');
         } else if (anyResult.totalLines > 0) {
           passOk(`TypeScript any 检测：${anyResult.totalAnys} 处 / ${anyResult.totalLines} 行 = ${anyResult.globalRatio}%`, 'CODE_QUALITY');
         } else {
@@ -730,9 +733,9 @@ async function cmdGate(args) {
             .slice(0, 15)
             .map(v => `${v.file}:${v.line} ${v.detail} — ${v.snippet}`)
             .join('\n   ');
-          fail(`硬编码业务身份检测命中（${identityResult.violations.length} 项）：\n   ${details}\n   ⚠️ 当前登录人/业务身份必须由调用方或状态管理提供，不能在页面中写死`);
+          fail(`硬编码业务身份检测命中（${identityResult.violations.length} 项）：\n   ${details}\n   ⚠️ 当前登录人/业务身份必须由调用方或状态管理提供，不能在页面中写死`, 'IDENTITY');
         } else {
-          log.ok('硬编码业务身份检测：clean');
+          passOk('硬编码业务身份检测：clean', 'IDENTITY');
         }
       } catch (e) {
         log.warn(`硬编码业务身份检测跳过：${e.message.split('\n')[0]}`);
@@ -1560,8 +1563,7 @@ async function cmdGate(args) {
             if (delta > 30) {
               fail(`校准差超标：自评覆盖率 ${selfPct.toFixed(1)}%，实测 ${actualPctNum.toFixed(1)}%，偏差 ${delta.toFixed(1)}% > 30% 红线 — 模型自我评估严重失准`, 'CALIBRATION');
             } else if (delta > 10) {
-              log.warn(`校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）`);
-              scoreSignals.push({ code: 'CALIBRATION', status: 'pass', message: `校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）` });
+              passWarn(`校准差警告：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%（偏差 ${delta.toFixed(1)}%）`, 'CALIBRATION');
             } else {
               passOk(`校准差正常：自评 ${selfPct.toFixed(1)}% vs 实测 ${actualPctNum.toFixed(1)}%`, 'CALIBRATION');
             }
@@ -1627,8 +1629,7 @@ async function cmdGate(args) {
                 fail(`错误处理缺失严重（${check.noHandling}/${check.totalApiCalls} = ${ratio}% 无 catch）：\n   ${check.violations.slice(0, 5).map(v => `${v.file}:${v.line} — ${v.detail}`).join('\n   ')}`, 'ERROR_HANDLING');
               } else {
                 // warning 级别仍算 pass（小于 50% 缺失不阻断）
-                log.warn(`错误处理警告（${check.noHandling} 无 catch / ${check.emptyCatch} 空 catch / ${check.totalApiCalls} 总调用）：\n   ${check.violations.slice(0, 3).map(v => `${v.file}:${v.line} — ${v.detail}`).join('\n   ')}`);
-                scoreSignals.push({ code: 'ERROR_HANDLING', status: 'pass', message: '错误处理警告（< 50%）' });
+                passWarn(`错误处理警告（${check.noHandling} 无 catch / ${check.emptyCatch} 空 catch / ${check.totalApiCalls} 总调用）：\n   ${check.violations.slice(0, 3).map(v => `${v.file}:${v.line} — ${v.detail}`).join('\n   ')}`, 'ERROR_HANDLING');
               }
             }
           }
@@ -1920,13 +1921,18 @@ async function cmdGate(args) {
       // 写入哨兵供后续阶段引用
       try {
         const scorePath = path.join(changeDir, `.gate-${phase}-score.json`);
+        const scoreBreakdown = scoreItems.map(s => {
+          const status = resolveStatus(s);
+          return {
+            name: s.name,
+            weight: s.weight,
+            status,
+            passed: status === 'pass',
+          };
+        });
         fs.writeFileSync(scorePath, JSON.stringify({
           phase, objectiveScore, selfScore, timestamp: Date.now(),
-          breakdown: scoreItems.map(s => ({
-            name: s.name, weight: s.weight,
-            status: resolveStatus(s),
-            passed: resolveStatus(s) === 'pass',
-          })),
+          breakdown: scoreBreakdown,
         }, null, 2) + '\n');
       } catch { /* 写入失败不影响 */ }
     } catch (e) {

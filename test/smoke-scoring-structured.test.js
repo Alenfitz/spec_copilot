@@ -84,3 +84,20 @@ test('smoke scoring: score json breakdown 写出 status 字段', () => {
     cleanup(dir);
   }
 });
+
+test('smoke scoring: identity clean 不应因文案变动失去结构化状态', () => {
+  const dir = mkTmp();
+  try {
+    setupSmokeProject(dir);
+    const out = runGate(dir, 'minimal', 'smoke', '--no-e2e');
+    assert.ok(/客观评分:/.test(out), `expected 客观评分, got tail:\n${out.slice(-700)}`);
+
+    const scorePath = path.join(dir, 'spec_copilot', 'changes', 'minimal', '.gate-smoke-score.json');
+    assert.ok(fs.existsSync(scorePath), 'expected smoke score json to exist');
+    const data = JSON.parse(fs.readFileSync(scorePath, 'utf-8'));
+    const identity = data.breakdown.find(item => item.name === '身份来源');
+    assert.ok(!identity, 'smoke breakdown should not accidentally contain review-only IDENTITY item');
+  } finally {
+    cleanup(dir);
+  }
+});

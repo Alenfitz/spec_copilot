@@ -136,3 +136,24 @@ test('scoring: 同一 code 先 pass 后 fail 时应以 fail 为准', () => {
     assert.ok(/log\.md 无冒烟通过记录/.test(out), `expected smoke log failure, got tail:\n${out.slice(-800)}`);
   } finally { cleanup(dir); }
 });
+
+test('scoring: review breakdown 应保留 warning 级 pass 的 status', () => {
+  const dir = mkTmp();
+  try {
+    setupMinimalProject(dir);
+    const changeDir = path.join(dir, 'spec_copilot', 'changes', 'minimal');
+    fs.writeFileSync(path.join(changeDir, 'tasks.md'), `# Tasks
+自评功能点覆盖率：0/1
+`);
+    const out = runGate(dir, 'minimal', 'review');
+    assert.ok(/客观评分:/.test(out), `expected 客观评分, got tail:\n${out.slice(-700)}`);
+
+    const scorePath = path.join(changeDir, '.gate-review-score.json');
+    if (!fs.existsSync(scorePath)) return;
+    const data = JSON.parse(fs.readFileSync(scorePath, 'utf-8'));
+    const calibration = data.breakdown.find(item => item.name === '校准差');
+    assert.ok(calibration, 'expected 校准差 item in breakdown');
+    assert.strictEqual(calibration.status, 'pass');
+    assert.strictEqual(calibration.passed, true);
+  } finally { cleanup(dir); }
+});
