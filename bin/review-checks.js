@@ -80,19 +80,34 @@ function extractSpecApis(specContent) {
   return apis;
 }
 
+/**
+ * 从 spec 提取页面路由（不是 API 路径！）
+ * v4.0.10: 修复"把 /api/foo 误判为页面路由"的 false positive
+ * 排除：/api/ 开头（接口）、含 {param} 的（API 路径占位符）、单段过短（如 /id）
+ */
 function extractSpecRoutes(specContent) {
   const routes = [];
   const seen = new Set();
-  // 路由声明
+  const isPageRoute = (p) => {
+    if (!p) return false;
+    if (p.startsWith('/api/') || p.startsWith('/v1/') || p.startsWith('/v2/')) return false;
+    if (/\{[^}]+\}/.test(p)) return false;  // API path 占位符
+    if (p.length < 2) return false;          // 排除 "/"
+    return true;
+  };
+
+  // 显式路由声明
   const routeRegex = /(?:路由|route|path|页面路径)[：:]\s*([\/\w\-:]+)/gi;
   let m;
   while ((m = routeRegex.exec(specContent)) !== null) {
-    if (!seen.has(m[1])) { seen.add(m[1]); routes.push(m[1]); }
+    const p = m[1];
+    if (isPageRoute(p) && !seen.has(p)) { seen.add(p); routes.push(p); }
   }
-  // 表格路由
+  // 表格中的路由
   const tableRouteRegex = /\|\s*(\/[a-zA-Z][\w\-\/:]*)\s*\|/g;
   while ((m = tableRouteRegex.exec(specContent)) !== null) {
-    if (!seen.has(m[1])) { seen.add(m[1]); routes.push(m[1]); }
+    const p = m[1];
+    if (isPageRoute(p) && !seen.has(p)) { seen.add(p); routes.push(p); }
   }
   return routes;
 }
@@ -741,7 +756,8 @@ function checkHardcodedIdentities(projectRoot) {
  */
 function checkRouteCompleteness(projectRoot, specContent) {
   const specRoutes = extractSpecRoutes(specContent);
-  if (specRoutes.length === 0) return { pass: true, message: 'spec 中无显式路由声明' };
+  // v4.0.10: 用更明确的措辞 — 让评分系统识别这是"无输入"而非"路由全通过"
+  if (specRoutes.length === 0) return { pass: true, message: 'spec 中无页面路由（仅 API 路径不计为页面路由）' };
 
   // 读取 router 文件
   const feRoots = detectFrontendRoots(projectRoot);

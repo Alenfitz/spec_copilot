@@ -560,7 +560,9 @@ async function cmdGate(args) {
 
   let pass = true;
   const failReasons = [];  // v2.9.0: 收集所有失败原因用于客观评分
+  const skipReasons = []; // v4.0.10: 收集"该检查无输入"的跳过信号 — 用于评分时正确归一化
   const fail = (msg) => { log.err(msg); pass = false; failReasons.push(msg); };
+  const skip = (msg) => { log.info(msg); skipReasons.push(msg); };
 
   const specPath = path.join(changeDir, 'spec.md');
   const tasksPath = path.join(changeDir, 'tasks.md');
@@ -937,7 +939,8 @@ async function cmdGate(args) {
         const weightedCoverage = (weightedScore / featurePointIds.length * 100).toFixed(1);
 
         if (!isGitRepo) {
-          log.warn(`非 git 仓库，跳过功能点覆盖率检查（spec 含 ${featurePointIds.length} 个功能点）`);
+          // v4.0.10: 用 skip 而非 warn — 评分系统会从总分剔除该项而非默认给分
+          skip(`非 git 仓库，跳过功能点覆盖率检查（spec 含 ${featurePointIds.length} 个功能点）`);
         } else if (weightedCoverage < 80) {
           const detail = [
             `前+后端均命中 ${fullHits.length}`,
@@ -978,6 +981,9 @@ async function cmdGate(args) {
           } else {
             log.ok(`Fxx ↔ ACxx 双向追踪：${trace.featureRows.length} 个功能点 / ${trace.acceptanceRows.length} 个 AC 场景全部连通`);
           }
+        } else {
+          // v4.0.10: spec 既没 Fxx 矩阵也没 ACxx 矩阵 → 跳过（评分剔除）
+          skip('Fxx ↔ ACxx 追踪：spec 中无 ACxx 验收场景矩阵，跳过');
         }
       } catch (e) {
         log.warn(`Fxx ↔ ACxx 双向追踪检查跳过：${e.message.split('\n')[0]}`);
@@ -1512,7 +1518,7 @@ async function cmdGate(args) {
 
           if (check.name === 'API 契约校验') {
             if (check.message) {
-              log.info(`${check.name}：${check.message}`);
+              skip(`${check.name}：${check.message}`);
             } else if (check.pass) {
               log.ok(`API 契约校验：${check.total} 个端点前后端均匹配`);
             } else {
@@ -1547,7 +1553,7 @@ async function cmdGate(args) {
 
           if (check.name === '错误处理审计') {
             if (check.totalApiCalls === 0) {
-              log.info('错误处理审计：未检测到前端 API 调用');
+              skip('错误处理审计：未检测到前端 API 调用');
             } else {
               const ratio = check.totalApiCalls > 0 ? ((check.noHandling / check.totalApiCalls) * 100).toFixed(0) : 0;
               if (check.noHandling === 0 && check.emptyCatch === 0) {
@@ -1577,7 +1583,8 @@ async function cmdGate(args) {
 
           if (check.name === '路由完整性') {
             if (check.message) {
-              log.info(`${check.name}：${check.message}`);
+              // v4.0.10: 用 skip 而非 info — 让评分系统识别为"无输入"，从总分剔除而非默认给分
+              skip(`${check.name}：${check.message}`);
             } else if (check.pass) {
               log.ok(`路由完整性：spec 声明的 ${check.total} 个路由均已注册`);
             } else {
@@ -1587,7 +1594,7 @@ async function cmdGate(args) {
 
           if (check.name === '业务规则覆盖') {
             if (check.message) {
-              log.info(`${check.name}：${check.message}`);
+              skip(`${check.name}：${check.message}`);
             } else if (check.pass) {
               log.ok(`业务规则覆盖：${check.matched}/${check.total} 条规则均有代码与验证证据${check.dslCount ? ` / RULE-CHECK ${check.dslCount} 个` : ''}`);
             } else {
@@ -1630,12 +1637,18 @@ async function cmdGate(args) {
           if (advResult.message) {
             log.info(`对抗性测试：${advResult.message}`);
           } else if (advResult.pass) {
-            log.ok(`对抗性测试通过（${advResult.tested} 项测试 / ${advResult.passed} 通过）`);
+            // v4.0.10: 修复语义歧义 — 之前 "通过（X 项测试 / 0 通过）" 自相矛盾
+            // pass = 无 vulnerabilities（500 错误），但单项响应可能未达预期（仅记录不算漏洞）
+            if (advResult.passed === advResult.tested) {
+              log.ok(`对抗性测试无漏洞（${advResult.tested}/${advResult.tested} 项响应符合预期）`);
+            } else {
+              log.ok(`对抗性测试无漏洞（${advResult.passed}/${advResult.tested} 项响应符合预期，无 5xx 漏洞）`);
+            }
           } else {
             const details = advResult.vulnerabilities.slice(0, 5).map(v =>
               `${v.api}: ${v.test} — ${v.detail}`
             ).join('\n   ');
-            log.warn(`对抗性测试发现 ${advResult.vulnerabilities.length} 个问题（${advResult.tested} 项测试 / ${advResult.failed} 失败）：\n   ${details}`);
+            log.warn(`对抗性测试发现 ${advResult.vulnerabilities.length} 个漏洞（${advResult.tested} 项测试 / ${advResult.failed} 项响应异常）：\n   ${details}`);
             // 对抗性测试结果为 warning 级别（不阻断 gate，但显著提示）
           }
         } else {
@@ -1717,14 +1730,20 @@ async function cmdGate(args) {
       } else {
         scoreItems = [
           { name: 'smoke 哨兵', weight: 8, failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
-          { name: '功能点覆盖', weight: 14, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/] },
-          { name: '验收追踪', weight: 12, failPatterns: [/Fxx ↔ ACxx/, /功能点缺少验收场景/, /AC 未关联功能点/, /引用不存在的 AC/] },
-          { name: '业务规则', weight: 10, failPatterns: [/业务规则覆盖不足/, /缺少前端规则落点/, /缺少后端规则落点/, /缺少触发\/结果证据/] },
-          { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/] },
+          { name: '功能点覆盖', weight: 14, failPatterns: [/覆盖率.*低于/, /功能点覆盖率/],
+            skipPatterns: [/非 git 仓库.*跳过功能点覆盖率/] },
+          { name: '验收追踪', weight: 12, failPatterns: [/Fxx ↔ ACxx/, /功能点缺少验收场景/, /AC 未关联功能点/, /引用不存在的 AC/],
+            skipPatterns: [/spec 中无 ACxx/, /spec 中无验收场景矩阵/, /无 §10\.5 验收场景/] },
+          { name: '业务规则', weight: 10, failPatterns: [/业务规则覆盖不足/, /缺少前端规则落点/, /缺少后端规则落点/, /缺少触发\/结果证据/],
+            skipPatterns: [/spec 中无 Vxx/, /spec 中无业务规则矩阵/] },
+          { name: 'API 契约', weight: 20, failPatterns: [/API.*契约/, /前端未调用/, /后端未实现/],
+            skipPatterns: [/spec 中无 API 端点声明/] },
           { name: '契约一致性', weight: 12, failPatterns: [/契约一致性/, /缺少必填字段/, /snake_case/] },
-          { name: '错误处理', weight: 10, failPatterns: [/错误处理缺失/, /无.*catch/] },
+          { name: '错误处理', weight: 10, failPatterns: [/错误处理缺失/, /无.*catch/],
+            skipPatterns: [/未检测到前端 API 调用/] },
           { name: '死代码', weight: 10, failPatterns: [/死代码/, /从未被.*import/] },
-          { name: '路由完整', weight: 8, failPatterns: [/路由缺失/] },
+          { name: '路由完整', weight: 8, failPatterns: [/路由缺失/],
+            skipPatterns: [/未找到 router 文件/, /spec 中无显式路由声明/, /spec 中无页面路由/] },
           { name: '前端检查', weight: 10, failPatterns: [/stub.*handler/, /dialog.*未挂载/, /API.*覆盖/] },
           { name: '身份来源', weight: 10, failPatterns: [/硬编码业务身份/, /当前登录人.*写死/, /硬编码用户 ID/] },
           { name: '校准差', weight: 10, failPatterns: [/校准差超标/, /自我评估.*失准/] },
@@ -1733,11 +1752,22 @@ async function cmdGate(args) {
 
       let totalWeight = 0;
       let earned = 0;
+      let skippedCount = 0;
       const breakdown = [];
 
       for (const item of scoreItems) {
-        totalWeight += item.weight;
         const failed = failReasons.some(r => item.failPatterns.some(p => p.test(r)));
+        // v4.0.10: 跳过状态 — 该检查的输入不存在（如 spec 没填 Vxx 矩阵），归一化时不计入分母
+        const skipped = !failed && item.skipPatterns &&
+          item.skipPatterns.some(p => skipReasons.some(r => p.test(r)));
+
+        if (skipped) {
+          skippedCount++;
+          breakdown.push(`  ⊝ ${item.name} (跳过/无输入)`);
+          continue;
+        }
+
+        totalWeight += item.weight;
         if (!failed) {
           earned += item.weight;
           breakdown.push(`  ✅ ${item.name} (+${item.weight})`);
@@ -1746,10 +1776,13 @@ async function cmdGate(args) {
         }
       }
 
-      const objectiveScore = Math.round((earned / totalWeight) * 100);
+      const objectiveScore = totalWeight > 0 ? Math.round((earned / totalWeight) * 100) : 0;
 
       console.log('');
-      console.log(`📊 客观评分: ${objectiveScore}/100（代码计算，非 AI 自评）`);
+      const skipNote = skippedCount > 0
+        ? `（${skippedCount} 项因 spec 未填相应输入而跳过，按剩余项归一化）`
+        : '';
+      console.log(`📊 客观评分: ${objectiveScore}/100${skipNote}`);
       console.log('─'.repeat(40));
       for (const line of breakdown) console.log(line);
       console.log('─'.repeat(40));
