@@ -52,7 +52,6 @@ spec.md 中必须填写：
   ```
   spec 已就绪 ✓
   → 下一步：/spec:apply <变更名>
-  → 全自动：/spec:flow <变更名>
   ```
 
 ## Step 4 — Lint

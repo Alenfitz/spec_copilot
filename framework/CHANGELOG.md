@@ -4,6 +4,26 @@
 
 ---
 
+## [4.0.9] - 2026-05-25
+
+### 修复
+- **`/spec:flow` 定位收敛**：不再把 `/spec:flow` 混入复杂度分级，改为“用户显式授权 AI 自动推进完整重流程”的执行模式，减少与 `/spec:lite` 的职责重叠。
+- **命令与脚本同步**：清理 `commands/spec/*` 与 `framework/scripts/spec-gate.sh` 中残留的 `🟡` 中等档语义，并为 `spec-gate.sh` 补齐 `smoke` phase，避免 prompt 层与脚本层不一致。
+- **安装文档对齐真实产物**：README 中的命令数量、`agents/` 目录、以及安装结构说明与当前 `install` 行为重新对齐，减少新用户按文档核对时的误解。
+- **内置 stack adapter 升级修正**：`update` 现在会正确刷新 `nextjs.md` 与 `react-express.md` 等内置适配器，不再把它们误判为用户自定义文件而跳过。
+
+### 测试
+- 新增 install/update 回归测试，覆盖：
+  - `spec_copilot/commands/spec/` 共 13 个目录式命令文件
+  - `spec_copilot/agents/` 安装产物存在
+  - `update --force` 刷新内置 stack adapter，同时保留用户自定义 adapter
+- 总测试数：62 → 65。
+
+### 兼容性
+- 不引入新的命令名或目录结构变化，定位为 patch 级同步与一致性修复。
+
+---
+
 ## [4.0.8] - 2026-05-24
 
 ### 修复

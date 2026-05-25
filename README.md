@@ -58,7 +58,7 @@ The framework auto-detects your tool on subsequent commands (`update`, `doctor`,
 | `/spec:bootstrap` | New empty project | Tech stack selection + scaffolding |
 | **`/spec:lite <req>`** | **Light requirement** (bug fix, UI tweak, small feature) | 5-section mini-spec → direct coding |
 | `/spec:propose <req>` | Heavy requirement | `spec.md` + `tasks.md` |
-| `/spec:flow <req>` | Auto mode | Full pipeline: propose → archive |
+| `/spec:flow <req>` | Full auto pipeline | propose → apply → smoke → review → archive (explicitly skips task-by-task pauses) |
 | `/spec:apply <name>` | After spec confirmed | Code committed task by task |
 | `/spec:smoke <name>` | After /spec:apply | Build + E2E + API smoke |
 | `/spec:review <name>` | After /spec:smoke | Spec compliance + code quality |
@@ -90,11 +90,8 @@ npx @alenfitz/spec-copilot uninstall --confirm       # Remove framework
 your-project/
 ├── <tool-specific prompt file>        ← AI reads this
 ├── <tool-specific commands/>          ← Native commands (if supported)
-├── README.md                          ← Auto-generated project docs
-├── docs/                              ← API, architecture, deploy docs
-│
 └── spec_copilot/
-    ├── commands/                      ← 12 command definitions
+    ├── commands/                      ← 13 command definitions
     ├── rules/
     │   ├── coding-style.md            ← Universal coding standards
     │   ├── security.md                ← Security red lines
@@ -106,6 +103,7 @@ your-project/
     ├── knowledge/index.md             ← Tag-indexed knowledge base
     ├── changes/templates/             ← spec.md / tasks.md / log.md
     ├── archives/                      ← Completed requirements
+    ├── agents/                        ← Built-in agent profiles
     └── scripts/                       ← Lint, gate, hook scripts
 ```
 
@@ -177,6 +175,8 @@ Works with **all AI tools**: Claude Code, Cursor, Windsurf, Copilot, Cline, open
 |------|----------|---------|
 | 🟢 Light | No API/schema/core flow/new dependency changes | `/spec:lite` — 5-section mini-spec in chat, direct coding |
 | 🔴 Heavy | New API / schema change / core flow / new dep / data migration / concurrency | `/spec:propose` — full spec + tasks + gates |
+
+`/spec:flow` is not a third complexity tier. It means the user explicitly authorizes the AI to run the full heavy-requirement pipeline without pausing after each task.
 
 ## Upgrade Safety
 

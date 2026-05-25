@@ -1,8 +1,8 @@
 ---
-description: 全自动流水线 — propose → apply → smoke → review → archive
+description: 全自动完整版流水线 — propose → apply → smoke → review → archive
 ---
 
-# /flow — 全自动开发流水线
+# /flow — 全自动完整版流水线
 
 请自动完成以下需求的端到端开发：
 
@@ -10,7 +10,18 @@ description: 全自动流水线 — propose → apply → smoke → review → a
 
 ## 模式说明
 
-此为**自动模式**，AI 自主推进每个阶段，不停下等待用户确认。仅适用 🟢 + 🟡 需求。🔴 复杂需求拒绝执行，提示走手动流程。
+此为**自动模式**，AI 自主推进每个阶段，不停下等待用户确认。
+
+这是标准“逐 Task 停顿”规则的**显式例外**：仅当用户明确使用 `/spec:flow` 时生效。
+
+适用场景：
+- 用户明确授权 AI 自动推进
+- 需求边界清晰，允许跳过逐 task 停顿
+- 需要完整留痕（spec/tasks/log + smoke + review + archive）
+
+复杂度约束：
+- 🟢 轻量需求：建议改用 `/spec:lite`
+- 🔴 复杂需求：可继续执行本流程
 
 ## 执行序列
 
@@ -21,9 +32,8 @@ description: 全自动流水线 — propose → apply → smoke → review → a
 ### Phase 1: Propose
 
 1. 复杂度评估（按 AGENTS.md §复杂度分级 判定）
-   - 🔴 → 🛑 **立即终止**，输出：*"🔴 复杂需求不适用自动模式，请走手动流程 /spec:propose + /spec:apply"*
-   - 🟢 简单 → 跳过 spec 创建，直接编码后结束
-   - 🟡 中等 → 继续执行
+   - 🟢 → 🛑 **立即终止**，输出：*"🟢 轻量需求不建议走全自动完整版流程，请改用 /spec:lite"*
+   - 🔴 → 继续执行
 2. Research：Grep/Read 现有代码 + knowledge/
 3. 写文件：
    - `spec_copilot/changes/<变更名>/spec.md`（按模板填充）
@@ -82,7 +92,7 @@ description: 全自动流水线 — propose → apply → smoke → review → a
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 需求 [变更名] 已完成 ✓
 
-复杂度：🟡 中等
+复杂度：🔴 重
 耗时阶段：propose → apply → smoke → review → archive
 改动文件：<N> 个
 知识沉淀：<N> 条
@@ -95,6 +105,7 @@ description: 全自动流水线 — propose → apply → smoke → review → a
 
 - 逐阶段输出进度标题（`## Phase N: ...`），不跳步
 - 任一步骤失败立即停，不继续后续阶段
-- 🔴 复杂需求直接拒绝
+- 🟢 轻量需求直接引导到 `/spec:lite`
+- 仅在用户明确使用 `/spec:flow` 时跳过逐 task 停顿
 - §9 有未解决项直接拒绝
 - Spec-Code 偏差必须记录

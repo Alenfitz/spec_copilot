@@ -10,12 +10,11 @@ description: 补充自动化测试
 
 运行 `npx @alenfitz/spec-copilot gate <变更名> test`（跨平台门禁检查）
 
-按 spec §8.5 测试策略生成测试用例，覆盖：
+按 spec §8 测试策略生成测试用例，覆盖：
 - 正向路径（Happy Path）
 - 边界条件（空集合、最大值、临界时间）
 - 异常路径（非法参数、依赖服务失败）
 
-文件位置和命名遵循对应 stack adapter §8。
 文件位置和命名遵循对应 stack adapter §8。
 
 ## 执行与报告
@@ -43,4 +42,4 @@ description: 补充自动化测试
 → 下一步：/spec:archive <变更名>
 ```
 
-> 注：/spec:test 是 🔴 复杂需求的必经阶段。🟡 中等需求可跳过直接 archive。
+> 注：/spec:test 是 🔴 复杂需求的必经阶段。🟢 轻量需求通常不进入该流程。

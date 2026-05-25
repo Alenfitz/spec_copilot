@@ -69,7 +69,7 @@ Agent({
 → 下一步：/spec:test <变更名>（测试后 /spec:archive）
 ```
 
-🟡 其它：
+其余情况：
 ```
 审查通过 ✓
 → 下一步：/spec:archive <变更名>

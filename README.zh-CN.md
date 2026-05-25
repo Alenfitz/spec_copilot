@@ -57,7 +57,7 @@ npx @alenfitz/spec-copilot doctor
 | `/spec:bootstrap` | 新空项目 | 栈选型 + 脚手架搭建 |
 | **`/spec:lite <需求>`** | **轻量需求**（bug 修复 / UI 调整 / 小功能） | 5 节迷你 spec → 直接编码 |
 | `/spec:propose <需求>` | 重量需求 | `spec.md` + `tasks.md` |
-| `/spec:flow <需求>` | 全自动模式 | 完整流水线：propose → archive |
+| `/spec:flow <需求>` | 全自动完整版流程 | propose → apply → smoke → review → archive（显式跳过逐 task 停顿） |
 | `/spec:apply <变更名>` | spec 确认后 | 逐 task 提交的代码 |
 | `/spec:smoke <变更名>` | /spec:apply 完成后 | 构建 + E2E + 接口冒烟 |
 | `/spec:review <变更名>` | /spec:smoke 通过后 | Spec 合规 + 代码质量审查 |
@@ -105,6 +105,7 @@ npx @alenfitz/spec-copilot uninstall --confirm       # 移除框架
     ├── knowledge/index.md             ← 带 tag 索引的知识库
     ├── changes/templates/             ← spec.md / tasks.md / log.md 模板
     ├── archives/                      ← 已归档的需求
+    ├── agents/                        ← 内置 agent profiles
     └── scripts/                       ← Lint、门禁、Hook 脚本
 ```
 
@@ -174,6 +175,8 @@ npx @alenfitz/spec-copilot guard unlock     # 解锁
 |------|------|------|
 | 🟢 轻 | 不改 API / 不改表 / 不改核心流程 / 不引入新依赖 | `/spec:lite` — 对话里 5 节迷你 spec，直接编码 |
 | 🔴 重 | 触及任一：新增 API / 改表结构 / 改核心流程 / 新依赖 / 数据迁移 / 并发或事务 | `/spec:propose` — 完整 spec + tasks + gate |
+
+`/spec:flow` 不属于复杂度档位；它表示**用户显式授权 AI 自动推进完整流程**。通常只在边界清晰的 🔴 重量需求上使用。
 
 ## 升级安全性
 

@@ -79,6 +79,53 @@ test('install: 模板文件正确拷贝（spec.md / tasks.md / log.md）', () =>
   }
 });
 
+test('install: spec_copilot/commands 为 13 个目录式命令文件', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool claude-code');
+    const specDir = path.join(dir, 'spec_copilot', 'commands', 'spec');
+    const files = fs.readdirSync(specDir).filter(name => name.endsWith('.md')).sort();
+    assert.strictEqual(files.length, 13, `expected 13 commands, got ${files.length}: ${files.join(', ')}`);
+    assert.ok(files.includes('docs.md'));
+    assert.ok(files.includes('flow.md'));
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('install: 通用框架目录包含 agents', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool claude-code');
+    assert.ok(fs.existsSync(path.join(dir, 'spec_copilot', 'agents')), 'spec_copilot/agents/ 应存在');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('update: 保留用户自定义 stack-adapter，同时刷新内置 nextjs/react-express', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool claude-code');
+
+    const adapterDir = path.join(dir, 'spec_copilot', 'stack-adapters');
+    const custom = path.join(adapterDir, 'my-team-stack.md');
+    const builtin = path.join(adapterDir, 'nextjs.md');
+
+    fs.writeFileSync(custom, '# custom adapter', 'utf-8');
+    fs.writeFileSync(builtin, 'stale builtin adapter', 'utf-8');
+
+    const out = runIn(dir, 'update --force --tool claude-code');
+    assert.ok(typeof out === 'string', `update 失败: ${JSON.stringify(out)}`);
+
+    const nextContent = fs.readFileSync(builtin, 'utf-8');
+    assert.ok(nextContent.includes('Next.js'), '内置 nextjs adapter 应被刷新');
+    assert.strictEqual(fs.readFileSync(custom, 'utf-8'), '# custom adapter', '自定义 adapter 应被保留');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('install: commands 中包含 spec/lite（v4.0.3+ 目录式命名）', () => {
   const dir = mkTmp();
   try {

@@ -42,13 +42,24 @@ case "$PHASE" in
       if [ "${incomplete:-0}" -gt 0 ]; then
         echo "  ⚠ tasks.md 仍有 ${incomplete} 个未开始 task（AI 将逐 task 推进）"
       fi
-    elif grep -q 'complexity:.*🟡' "$SPEC"; then
-      ok "中等需求，无需 tasks.md"
     elif grep -q 'complexity:.*🟢' "$SPEC"; then
       die "🟢 简单需求不应进入 apply 流程 — 直接在对话中编码"
     fi
 
     echo "GATE PASSED → 可以开始编码"
+    ;;
+
+  smoke)
+    echo "→ 门禁检查: smoke 阶段"
+    [ -f "$SPEC" ] || die "spec.md 不存在"
+
+    if [ -f "$LOG" ]; then
+      ok "log.md 已就绪"
+    else
+      die "log.md 不存在 — 请先执行 /spec:propose"
+    fi
+
+    echo "GATE PASSED → 可以开始冒烟"
     ;;
 
   review)
@@ -106,8 +117,6 @@ case "$PHASE" in
     # 🔴 复杂需求必须跑测试
     if grep -q 'complexity:.*🔴' "$SPEC"; then
       ok "🔴 复杂需求 — 强制执行自动化测试"
-    elif grep -q 'complexity:.*🟡' "$SPEC"; then
-      echo "  ℹ 🟡 中等需求 — 测试可选但推荐"
     else
       die "此阶段仅适用于 🔴 复杂需求"
     fi
@@ -116,7 +125,7 @@ case "$PHASE" in
     ;;
 
   *)
-    echo "Usage: spec-gate.sh <变更名> <apply|review|archive|test>"
+    echo "Usage: spec-gate.sh <变更名> <apply|smoke|review|archive|test>"
     exit 1
     ;;
 esac

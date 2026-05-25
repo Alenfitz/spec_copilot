@@ -41,7 +41,7 @@ const {
 
 // ─── 常量 ───────────────────────────────────────────────────
 
-const BUILTIN_ADAPTERS = ['_template.md', 'README.md', 'spring-boot-vue3.md'];
+const BUILTIN_ADAPTERS = ['_template.md', 'nextjs.md', 'react-express.md', 'spring-boot-vue3.md'];
 const TOOL_STATE_FILE = '.spec-copilot-tool'; // 记录使用的工具
 
 // ─── 工具函数 ───────────────────────────────────────────────

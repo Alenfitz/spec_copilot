@@ -14,7 +14,7 @@
 | Agent | 触发阶段 | 作用 | 是否必须用 sub-agent |
 |-------|---------|------|--------------------|
 | `spec-compliance-reviewer` | `/spec:review` 阶段一 | 独立验证 spec 功能点是否真的在代码里 | **强制**（降级会标警告） |
-| `adversarial-tester` | `/spec:review` 通过后（🔴 必跑） | 设计破坏性场景，证伪"代码看起来工作" | 强制（🔴）/ 可选（🟡） |
+| `adversarial-tester` | `/spec:review` 通过后（🔴 必跑） | 设计破坏性场景，证伪"代码看起来工作" | 强制（🔴） |
 | `retrospective-extractor` | `/spec:archive` 前 | 从 log/tasks/diff 提炼真正值得沉淀的 knowledge | 推荐（降级时质量明显下降） |
 
 ## 如何调用（按宿主能力）
