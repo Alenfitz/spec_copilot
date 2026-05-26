@@ -89,10 +89,16 @@ npx @alenfitz/spec-copilot gate <变更名> <phase>
 |------|--------|
 | `apply` | spec.md 存在 + §9 已清空 |
 | `smoke` | 前后端构建通过 + 骨架组件检测 + **E2E 浏览器冒烟** |
-| `review` | smoke 哨兵 + 所有 task 已 commit + 功能点覆盖矩阵真实匹配 |
-| `archive` | spec.md §12 审查结论为通过 + review 哨兵 |
+| `review` | apply 契约冻结 + smoke 哨兵 + 所有 task 已 commit + 功能点覆盖矩阵真实匹配 |
+| `archive` | apply 契约冻结 + review 哨兵 + review.md 审查结论 |
 
 门禁不通过 → 阻断，提示缺失的前置条件。
+
+### Spec Contract Freeze（v4.0.18）
+
+`gate apply` 通过后，`spec.md` 的需求契约区会被冻结并写入 `.gate-apply-passed`。review/test/archive 阶段默认只能补代码、测试、tasks/log/review 记录，不能通过删除功能点、改低业务规则、缩小 API 或验收范围来让当前实现显得合格。
+
+如确需变更需求范围，必须停止并让用户确认新的范围，不能在 review 失败后自行改低 spec。
 
 ### 评分三态（v4.0.10 引入）
 

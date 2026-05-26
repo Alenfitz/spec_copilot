@@ -8,10 +8,11 @@ description: Review 后修正迭代（修复→重新验证闭环）
 
 ## 修复流程
 
-1. 读取 spec.md §12 审查结论和 log.md 中的问题列表
+1. 读取 review.md（或当前审查记录）和 log.md 中的问题列表
 2. 逐项修复：
    - 每修一个问题，在 log.md 记录：`| 时间 | fix | 修复 <问题描述> |`
-   - 修改涉及的文档同步更新（spec.md / tasks.md）
+   - 修改涉及的执行记录同步更新（tasks.md / log.md / review.md）
+   - 不得为通过 review 而改低 apply 后冻结的 spec 契约；确需变更需求范围时，停止并请求用户确认
 3. 全部修复后一次 commit：`[变更名] fix: <修复概述>`
 4. 更新 tasks.md 变更摘要中的"遗留问题"
 

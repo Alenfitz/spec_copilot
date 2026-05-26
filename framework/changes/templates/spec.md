@@ -65,7 +65,7 @@ GET /api/xxx
 | Task | 状态 | 实际改动文件 | 备注 |
 
 ## 12. 审查结论
-> /spec:review 完成后填写
+> v4.0.18 起推荐写入独立 review.md；apply 后不得改低本 spec 的需求契约区。
 
 - Spec 合规：✅/❌（功能点真实覆盖率 X/Y）
 - Code Quality：Critical: 0 / Important: N

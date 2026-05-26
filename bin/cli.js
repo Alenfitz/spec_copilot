@@ -296,6 +296,64 @@ function buildGateSentinel(projectRoot, changeName, phase, args, runtime = {}) {
   };
 }
 
+function hashSpecContract(specContent) {
+  const contractSections = {};
+  const sectionRanges = [
+    ['1', '## 2. 代码现状'],
+    ['3', '## 4. 业务规则'],
+    ['4', '## 5. 数据变更'],
+    ['5', '## 6. 接口契约'],
+    ['6', '## 7. 影响范围'],
+    ['7', '## 8. 测试策略'],
+    ['9', '## 10. 技术决策'],
+  ];
+  for (const [startNum, endMarker] of sectionRanges) {
+    const startPattern = new RegExp(`^##\\s+${startNum}\\.[^\\n]*`, 'm');
+    const start = specContent.search(startPattern);
+    if (start === -1) continue;
+    const tail = specContent.slice(start);
+    const endIdx = endMarker ? tail.indexOf(`\n${endMarker}`) : -1;
+    contractSections[startNum] = (endIdx === -1 ? tail : tail.slice(0, endIdx)).trim();
+  }
+  const h = crypto.createHash('sha256');
+  for (const key of Object.keys(contractSections).sort()) {
+    h.update(key);
+    h.update('\0');
+    h.update(contractSections[key]);
+    h.update('\0');
+  }
+  return { hash: h.digest('hex'), sections: contractSections };
+}
+
+function readGateJson(dir, name) {
+  return readJsonSafe(path.join(dir, name));
+}
+
+function validateSpecContractFreeze(projectRoot, changeName, specContent) {
+  const applySentinelPath = path.join(projectRoot, 'spec_copilot', 'changes', changeName, '.gate-apply-passed');
+  if (!fs.existsSync(applySentinelPath)) {
+    return { pass: false, reason: '缺少 .gate-apply-passed 哨兵 — 先运行 `gate <name> apply` 冻结 spec 契约' };
+  }
+  const data = readJsonSafe(applySentinelPath);
+  if (!data || data.generatedBy !== 'spec-copilot-cli' || !data.evidence || data.phase !== 'apply') {
+    return { pass: false, reason: '.gate-apply-passed 缺少 CLI 签发的 apply 契约证据' };
+  }
+  const expected = data.evidence.specContractHash;
+  if (!expected) {
+    return { pass: false, reason: '.gate-apply-passed 缺少 specContractHash' };
+  }
+  const current = hashSpecContract(specContent);
+  if (expected !== current.hash) {
+    return {
+      pass: false,
+      reason: `spec.contract 已在 apply 后被修改：当前 ${current.hash.slice(0, 8)} != apply 时 ${expected.slice(0, 8)}，必须回到 /spec:propose 或走 amend`,
+      data,
+      current,
+    };
+  }
+  return { pass: true, data, current };
+}
+
 function validateGateEvidence(projectRoot, changeName, phase, sentinelPath) {
   const data = readJsonSafe(sentinelPath);
   if (!data || data.generatedBy !== 'spec-copilot-cli' || !data.evidence) {
@@ -776,6 +834,10 @@ async function cmdGate(args) {
 
   const specContent = fs.readFileSync(specPath, 'utf-8');
   const isComplex = specContent.includes('complexity:') && specContent.includes('🔴');
+  const contractFreeze = validateSpecContractFreeze(projectRoot, changeName, specContent);
+  if (phase !== 'apply' && !contractFreeze.pass) {
+    fail(`spec 契约冻结校验失败：${contractFreeze.reason}`, 'SPEC_CONTRACT');
+  }
 
   switch (phase) {
     case 'apply': {
@@ -1145,6 +1207,11 @@ async function cmdGate(args) {
       break;
     }
     case 'review': {
+      if (!contractFreeze.pass) {
+        fail(`spec 契约冻结失败：${contractFreeze.reason}`, 'SPEC_CONTRACT');
+      } else {
+        passOk(`spec 契约冻结有效（${Object.keys(contractFreeze.current.sections).length} 个章节）`, 'SPEC_CONTRACT');
+      }
       // ─── smoke gate 哨兵检查（v2.2.0）───
       const smokeSentinel = path.join(changeDir, '.gate-smoke-passed');
       if (fs.existsSync(smokeSentinel)) {
@@ -1638,6 +1705,9 @@ async function cmdGate(args) {
         passOk('显式未完成声明检测：clean', 'INCOMPLETE_DECLARATION');
       }
 
+      const specContract = hashSpecContract(specContent);
+      passOk(`spec 契约区已计算（${Object.keys(specContract.sections).length} 个章节）`, 'SPEC_CONTRACT');
+
       // ─── 反"太嗨"机制 1：嗨语言检测 ───
       const HYPE_WORDS = [
         '基本完成', '大部分', '核心已实现', '完美', '圆满', '非常好',
@@ -2002,6 +2072,11 @@ async function cmdGate(args) {
       break;
     }
     case 'archive': {
+      if (!contractFreeze.pass) {
+        fail(`spec 契约冻结失败：${contractFreeze.reason}`, 'SPEC_CONTRACT');
+      } else {
+        passOk(`spec 契约冻结有效（${Object.keys(contractFreeze.current.sections).length} 个章节）`, 'SPEC_CONTRACT');
+      }
       // 1. spec §12 必须显式通过（保留原检查）
       if (/结论：通过/.test(specContent)) {
         log.ok('spec.md §12 审查结论为通过');
@@ -2253,6 +2328,35 @@ async function cmdGate(args) {
   }
 
   console.log('');
+  if (phase === 'apply' && pass) {
+    try {
+      const applySentinelPath = path.join(changeDir, '.gate-apply-passed');
+      const applyEvidence = {
+        schemaVersion: 1,
+        generatedBy: 'spec-copilot-cli',
+        phase: 'apply',
+        changeName,
+        version: readVersion(),
+        timestamp: Date.now(),
+        specContractHash: hashSpecContract(specContent).hash,
+        runtime: {
+          trustLevel: runtimeEvidence.trustLevel,
+          degraded: runtimeEvidence.degraded,
+          degradationReasons: runtimeEvidence.degradationReasons,
+        },
+      };
+      fs.writeFileSync(applySentinelPath, JSON.stringify({
+        generatedBy: 'spec-copilot-cli',
+        phase: 'apply',
+        changeName,
+        timestamp: applyEvidence.timestamp,
+        version: applyEvidence.version,
+        evidence: applyEvidence,
+      }, null, 2) + '\n');
+    } catch (e) {
+      log.warn(`写入 apply 哨兵失败：${e.message}`);
+    }
+  }
   if (pass) {
     // 成功通过 smoke/review/test gate → 写哨兵
     if (phase === 'smoke' || phase === 'review' || (phase === 'test' && args.includes('--record-pass'))) {

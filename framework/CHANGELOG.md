@@ -4,6 +4,51 @@
 
 ---
 
+## [4.0.18] - 2026-05-26
+
+### Spec Contract Freeze
+
+本版本不声称能阻止模型完全绕过流程。它只解决一个更窄但真实暴露的问题：review 失败后，模型不能通过改低 `spec.md` 的需求范围，让当前代码显得合格。
+
+#### apply 后冻结 spec 契约区
+
+- `gate apply` 通过后写入 `.gate-apply-passed`
+- 记录 `specContractHash`
+- 冻结范围覆盖需求合同区：背景目标、功能点、业务规则、数据变更、接口契约、影响范围、测试策略、待澄清/技术决策
+- 不冻结执行日志、review 结论等运行记录，避免流程死锁
+
+效果：apply 之后删除功能点、改低业务规则、缩小 API 或验收范围，会在后续 gate 暴露。
+
+#### review/archive 校验 apply 合同
+
+- `gate review` 会校验 `.gate-apply-passed`
+- `gate archive` 会校验 `.gate-apply-passed`
+- 合同区 hash 不一致时，gate 失败并提示回到 propose/amend 路径
+
+效果：review 失败后的默认动作必须是补实现、补测试、补契约闭环，而不是改低 spec。
+
+#### review 结果迁移到独立 review.md
+
+- 新增 `framework/changes/templates/review.md`
+- `/spec:review` 文档改为推荐写入 `review.md`
+- `AGENTS.md.template` 与 `fix/flow/archive` 文档同步避免继续引导模型写回被冻结的 spec 合同正文
+
+效果：`spec.md` 逐步回归“需求合同”角色，review 结论回归“审查记录”角色。
+
+### 测试
+
+新增/更新回归测试：
+
+- apply 哨兵缺失或合同 hash 不匹配时，review/archive gate 阻断
+- apply 后修改功能点会触发 spec contract freeze
+- 只更新 log.md 不会触发合同冻结失败
+
+验证结果：
+
+- `npm test`：108 / 108 通过
+
+---
+
 ## [4.0.17] - 2026-05-26
 
 ### 验证可信度加固

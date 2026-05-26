@@ -33,7 +33,7 @@ function runGate(projectRoot, name, phase, extra = '') {
 }
 
 function setupChange(dir, options = {}) {
-  const { logExtra = '', withReviewSentinel = true, complexity = '🔴 重' } = options;
+  const { logExtra = '', withReviewSentinel = true, complexity = '🔴 重', specExtra = '' } = options;
   execSync(`node "${CLI}" install --tool claude-code`, { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
   const changeDir = path.join(dir, 'spec_copilot', 'changes', 'complex');
   fs.mkdirSync(changeDir, { recursive: true });
@@ -46,6 +46,8 @@ test
 
 ## 3. 功能点
 - **F01** — 测试
+
+${specExtra}
 
 ## 12. 审查结论
 - Spec 合规：✅
@@ -71,6 +73,7 @@ ${logExtra}
     writeGateSentinel(dir, 'complex', 'smoke');
     writeGateSentinel(dir, 'complex', 'review');
   }
+  writeApplySentinel(dir, 'complex');
   return changeDir;
 }
 
@@ -114,6 +117,29 @@ function writeGateSentinel(projectRoot, changeName, phase) {
     },
   };
   fs.writeFileSync(path.join(changeDir, `.gate-${phase}-passed`), JSON.stringify(sentinel, null, 2));
+}
+
+function writeApplySentinel(projectRoot, changeName) {
+  const changeDir = path.join(projectRoot, 'spec_copilot', 'changes', changeName);
+  const spec = fs.readFileSync(path.join(changeDir, 'spec.md'), 'utf-8');
+  const sentinel = {
+    generatedBy: 'spec-copilot-cli',
+    phase: 'apply',
+    changeName,
+    timestamp: Date.now(),
+    version: 'test',
+    evidence: {
+      schemaVersion: 1,
+      generatedBy: 'spec-copilot-cli',
+      phase: 'apply',
+      changeName,
+      version: 'test',
+      timestamp: Date.now(),
+      specContractHash: hashSpecContract(spec),
+      runtime: { trustLevel: 'trusted', degraded: false, degradationReasons: [] },
+    },
+  };
+  fs.writeFileSync(path.join(changeDir, '.gate-apply-passed'), JSON.stringify(sentinel, null, 2));
 }
 
 function shouldSkipEvidenceFile(relPath, changeName) {
@@ -166,6 +192,35 @@ function computeSourceHash(projectRoot, changeName) {
     h.update('\0');
   }
   return { hash: h.digest('hex'), fileCount: files.length };
+}
+
+function hashSpecContract(specContent) {
+  const contractSections = {};
+  const sectionRanges = [
+    ['1', '## 2. 代码现状'],
+    ['3', '## 4. 业务规则'],
+    ['4', '## 5. 数据变更'],
+    ['5', '## 6. 接口契约'],
+    ['6', '## 7. 影响范围'],
+    ['7', '## 8. 测试策略'],
+    ['9', '## 10. 技术决策'],
+  ];
+  for (const [startNum, endMarker] of sectionRanges) {
+    const startPattern = new RegExp(`^##\\s+${startNum}\\.[^\\n]*`, 'm');
+    const start = specContent.search(startPattern);
+    if (start === -1) continue;
+    const tail = specContent.slice(start);
+    const endIdx = endMarker ? tail.indexOf(`\n${endMarker}`) : -1;
+    contractSections[startNum] = (endIdx === -1 ? tail : tail.slice(0, endIdx)).trim();
+  }
+  const h = crypto.createHash('sha256');
+  for (const key of Object.keys(contractSections).sort()) {
+    h.update(key);
+    h.update('\0');
+    h.update(contractSections[key]);
+    h.update('\0');
+  }
+  return h.digest('hex');
 }
 
 test('archive gate: 🔴 complex change without test sentinel fails', () => {
@@ -258,6 +313,39 @@ test('archive gate: stale review sentinel fails after source changes', () => {
     assert.match(out, /review gate 哨兵无效|已失效/);
     assert.match(out, /必须重跑 gate/);
     assert.match(out, /Gate 未通过/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('review gate: spec contract change after apply is blocked', () => {
+  const dir = mkTmp();
+  try {
+    const changeDir = setupChange(dir, {
+      withReviewSentinel: false,
+    });
+    const specPath = path.join(changeDir, 'spec.md');
+    const spec = fs.readFileSync(specPath, 'utf-8');
+    fs.writeFileSync(specPath, spec.replace('- **F01** — 测试', '- **F01** — 测试\n- **F02** — apply 后新增需求'));
+    const out = runGate(dir, 'complex', 'review');
+    assert.match(out, /spec 契约冻结校验失败|spec 契约冻结失败/);
+    assert.match(out, /specContractHash|改低需求|必须回到 \/spec:propose/);
+    assert.match(out, /Gate 未通过/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('archive gate: apply contract freeze does not block pure log updates', () => {
+  const dir = mkTmp();
+  try {
+    const changeDir = setupChange(dir, {
+      logExtra: '| 2026-05-25 | note | only log updated | ok |',
+    });
+    writeGateSentinel(dir, 'complex', 'test');
+    const out = runGate(dir, 'complex', 'archive');
+    assert.match(out, /Gate 通过/);
+    assert.ok(fs.existsSync(path.join(changeDir, '.gate-apply-passed')));
   } finally {
     cleanup(dir);
   }

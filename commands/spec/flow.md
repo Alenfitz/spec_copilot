@@ -73,7 +73,7 @@ description: 全自动完整版流水线 — propose → apply → smoke → rev
 1. 运行 `npx @alenfitz/spec-copilot gate <变更名> review`
 2. 阶段一 Spec Compliance（附录 A）：逐条验证功能点
 3. 阶段二 Code Quality（附录 B）：按 Critical/Important/Minor 审查
-4. 更新 spec.md §12 审查结论
+4. 将审查结论写入 `review.md`（不要改低 apply 后冻结的 spec 契约）
 5. 评估结果：
    - Critical = 0 → 执行 Phase 5
    - Critical > 0 → 🛑 **停下来**，列出所有 Critical 问题，提示：*"审查未通过，修复后请说'继续'或 /spec:fix"*
