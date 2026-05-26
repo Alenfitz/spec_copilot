@@ -74,6 +74,7 @@ npx @alenfitz/spec-copilot install --tool <name>    # 安装框架
 npx @alenfitz/spec-copilot update [--force]          # 升级框架
 npx @alenfitz/spec-copilot sync [--tool <name>]      # 重新同步适配器文件
 npx @alenfitz/spec-copilot gate <变更名> <phase>      # 阶段门禁检查
+npx @alenfitz/spec-copilot watch                     # 监测绕过流程的源码变更（报警，不阻断）
 npx @alenfitz/spec-copilot lint <变更名>              # Spec 完整性检查
 npx @alenfitz/spec-copilot agents list               # 查看内置 Agent Profile
 npx @alenfitz/spec-copilot scorecard <msg-file>      # 校验 task commit 自评分卡

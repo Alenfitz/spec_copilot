@@ -4,6 +4,53 @@
 
 ---
 
+## [4.0.19] - 2026-05-26
+
+### Watch 实时监测
+
+本版本不声称能阻止模型写文件。它只解决一个更现实的问题：当模型完全不跑 gate、直接修改源码或绕过归档流程时，用户可以尽早看到报警。
+
+#### 新增 `spec-copilot watch`
+
+- `spec-copilot watch` 启动长驻监测
+- `spec-copilot watch --once` 执行一次扫描，便于测试和脚本集成
+- 默认每 1000ms 扫描一次文件快照
+- 输出 `SPEC-COPILOT WATCH ALERT`
+
+效果：把“完全绕流程”的问题从事后复盘提前到文件变更发生时暴露。
+
+#### 第一版报警规则
+
+- 业务源码发生变更但没有 active change
+- 业务源码发生变更但 active change 尚无 `.gate-apply-passed`
+- 业务源码发生变更但 active change 缺少 `tasks.md`
+- 启用 scaffold 模式后，`spec_copilot/changes/<name>/spec.md` 变更但缺少 `.gate-scaffold`
+- archive 目录出现但缺少 `.gate-review-passed` / `.gate-test-passed`
+
+#### 边界
+
+- watch 是报警器，不是阻断器
+- 用户未启动 watch 时，此保护不生效
+- 第一版优先少而准，避免报警噪音压过有效信号
+- scaffold 检查默认不启用，避免在正式 scaffold 命令落地前干扰现有 `/spec:propose` 流程
+
+### 测试
+
+新增：
+
+- `test/watch.test.js`
+
+覆盖：
+
+- 无 active change 时修改业务源码会报警
+- 未通过 apply gate 时修改业务源码会报警
+- archive 缺少 review/test 哨兵会报警
+- 未启用 scaffold 模式时，手写 `spec.md` 不误报
+- 启用 scaffold 模式后，手写 `spec.md` 会报警
+- 有 active change 且存在 apply 哨兵时不误报
+
+---
+
 ## [4.0.18] - 2026-05-26
 
 ### Spec Contract Freeze

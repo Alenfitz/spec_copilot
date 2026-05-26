@@ -75,6 +75,7 @@ npx @alenfitz/spec-copilot install --tool <name>    # Install framework
 npx @alenfitz/spec-copilot update [--force]          # Upgrade framework
 npx @alenfitz/spec-copilot sync [--tool <name>]      # Re-sync adapter files
 npx @alenfitz/spec-copilot gate <name> <phase>       # Phase gate check
+npx @alenfitz/spec-copilot watch                     # Watch for workflow-bypass source changes (alert-only)
 npx @alenfitz/spec-copilot lint <name>               # Spec completeness check
 npx @alenfitz/spec-copilot agents list               # List built-in agent profiles
 npx @alenfitz/spec-copilot scorecard <msg-file>      # Validate task commit self-scorecard

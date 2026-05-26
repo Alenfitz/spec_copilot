@@ -3191,6 +3191,218 @@ spec-copilot ci — CI/CD 自动化
   }
 }
 
+// ─── Watch（流程绕行监测）──────────────────────────────────
+
+function shouldSkipWatchPath(relPath) {
+  const rel = relPath.replace(/\\/g, '/');
+  const first = rel.split('/')[0];
+  if (
+    rel === '.git' ||
+    rel.startsWith('.git/') ||
+    first === 'node_modules' ||
+    first === 'dist' ||
+    first === 'target' ||
+    first === 'build' ||
+    first === 'coverage' ||
+    first === '.next' ||
+    first === '.nuxt' ||
+    rel.includes('/node_modules/') ||
+    rel.includes('/dist/') ||
+    rel.includes('/target/') ||
+    rel.includes('/build/') ||
+    rel.includes('/coverage/') ||
+    /\.DS_Store$/.test(rel)
+  ) return true;
+  return false;
+}
+
+function isBusinessSourcePath(relPath) {
+  const rel = relPath.replace(/\\/g, '/');
+  if (rel.startsWith('spec_copilot/')) return false;
+  if (rel.startsWith('docs/') || rel.startsWith('doc/')) return false;
+  if (/^(README|CHANGELOG|LICENSE)/i.test(path.basename(rel))) return false;
+  if (!/(^|\/)(src|app|pages|views|components|server|backend|frontend)\//.test(rel)) return false;
+  return /\.(java|kt|go|py|rb|cs|php|ts|tsx|js|jsx|vue|css|scss|less|sql|xml|yml|yaml|json)$/.test(rel);
+}
+
+function listWatchFiles(root) {
+  const files = [];
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(root, full).replace(/\\/g, '/');
+      if (shouldSkipWatchPath(rel)) continue;
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        files.push(rel);
+      }
+    }
+  };
+  walk(root);
+  return files.sort();
+}
+
+function takeWatchSnapshot(root) {
+  const snapshot = new Map();
+  for (const rel of listWatchFiles(root)) {
+    try {
+      snapshot.set(rel, fs.statSync(path.join(root, rel)).mtimeMs);
+    } catch {}
+  }
+  return snapshot;
+}
+
+function diffWatchSnapshots(prev, next) {
+  const changed = [];
+  for (const [rel, mtime] of next.entries()) {
+    if (!prev.has(rel) || prev.get(rel) !== mtime) changed.push(rel);
+  }
+  return changed;
+}
+
+function getActiveChangeDirs(projectRoot) {
+  const changesDir = path.join(projectRoot, 'spec_copilot', 'changes');
+  if (!fs.existsSync(changesDir)) return [];
+  return fs.readdirSync(changesDir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && entry.name !== 'templates')
+    .map(entry => ({ name: entry.name, dir: path.join(changesDir, entry.name) }));
+}
+
+function isScaffoldRequired(projectRoot) {
+  return fs.existsSync(path.join(projectRoot, 'spec_copilot', '.scaffold-required'));
+}
+
+function inspectArchiveViolation(projectRoot, relPath) {
+  const rel = relPath.replace(/\\/g, '/');
+  const parts = rel.split('/');
+  if (parts[0] !== 'spec_copilot' || parts[1] !== 'archives' || parts.length < 4) return null;
+  const archiveDir = path.join(projectRoot, parts[0], parts[1], parts[2], parts[3]);
+  if (!fs.existsSync(archiveDir)) return null;
+  const reviewSentinel = path.join(archiveDir, '.gate-review-passed');
+  const specPath = path.join(archiveDir, 'spec.md');
+  const spec = fs.existsSync(specPath) ? fs.readFileSync(specPath, 'utf-8') : '';
+  const isArchivedComplex = /complexity:.*🔴/.test(spec);
+  const missing = [];
+  if (!fs.existsSync(reviewSentinel)) missing.push('.gate-review-passed');
+  if (isArchivedComplex && !fs.existsSync(path.join(archiveDir, '.gate-test-passed'))) {
+    missing.push('.gate-test-passed');
+  }
+  if (missing.length === 0) return null;
+  return {
+    code: 'ARCHIVE_WITHOUT_SENTINEL',
+    message: `归档目录 ${parts.slice(0, 4).join('/')} 缺少 ${missing.join(' / ')}，可能绕过 archive gate`,
+    files: [rel],
+  };
+}
+
+function analyzeWatchChanges(projectRoot, changedFiles) {
+  const alerts = [];
+  const activeChanges = getActiveChangeDirs(projectRoot);
+  const businessFiles = changedFiles.filter(isBusinessSourcePath);
+  const scaffoldRequired = isScaffoldRequired(projectRoot);
+
+  if (businessFiles.length > 0) {
+    if (activeChanges.length === 0) {
+      alerts.push({
+        code: 'SRC_WITHOUT_ACTIVE_CHANGE',
+        message: '业务源码发生变更，但未检测到 active change，可能完全跳过 propose/apply',
+        files: businessFiles,
+      });
+    } else if (!activeChanges.some(change => fs.existsSync(path.join(change.dir, '.gate-apply-passed')))) {
+      alerts.push({
+        code: 'SRC_BEFORE_APPLY',
+        message: '业务源码发生变更，但 active change 尚无 .gate-apply-passed，可能未通过 apply gate 就编码',
+        files: businessFiles,
+      });
+    }
+
+    const missingTasks = activeChanges.filter(change => !fs.existsSync(path.join(change.dir, 'tasks.md')));
+    if (missingTasks.length > 0) {
+      alerts.push({
+        code: 'SRC_WITHOUT_TASKS',
+        message: `业务源码发生变更，但 ${missingTasks.map(c => c.name).join(', ')} 缺少 tasks.md，可能跳过任务拆分`,
+        files: businessFiles,
+      });
+    }
+  }
+
+  for (const rel of changedFiles) {
+    if (scaffoldRequired && /^spec_copilot\/changes\/[^/]+\/spec\.md$/.test(rel)) {
+      const changeDir = path.join(projectRoot, path.dirname(rel));
+      if (!fs.existsSync(path.join(changeDir, '.gate-scaffold'))) {
+        alerts.push({
+          code: 'SPEC_WITHOUT_SCAFFOLD',
+          message: `${rel} 发生变更但缺少 .gate-scaffold，后续 scaffold 入口落地后应禁止手写 change`,
+          files: [rel],
+        });
+      }
+    }
+    const archiveAlert = inspectArchiveViolation(projectRoot, rel);
+    if (archiveAlert) alerts.push(archiveAlert);
+  }
+
+  return alerts;
+}
+
+function printWatchAlerts(alerts) {
+  for (const alert of alerts) {
+    console.log('');
+    console.log('\x1b[31mSPEC-COPILOT WATCH ALERT\x1b[0m');
+    console.log(`  code: ${alert.code}`);
+    console.log(`  ${alert.message}`);
+    for (const f of alert.files.slice(0, 10)) {
+      console.log(`  - ${f}`);
+    }
+    if (alert.files.length > 10) {
+      console.log(`  ... 还有 ${alert.files.length - 10} 个文件`);
+    }
+    console.log('  建议：立即中止当前 AI 执行，回到 /spec:init 或 /spec:propose，并确认 gate 状态。');
+  }
+}
+
+function cmdWatch(args) {
+  const projectRoot = findProjectRoot();
+  const once = args.includes('--once');
+  const intervalIdx = args.indexOf('--interval');
+  const intervalMs = intervalIdx !== -1 && args[intervalIdx + 1]
+    ? Math.max(parseInt(args[intervalIdx + 1], 10) || 1000, 200)
+    : 1000;
+  const sinceIdx = args.indexOf('--since');
+  const since = sinceIdx !== -1 && args[sinceIdx + 1] ? parseFloat(args[sinceIdx + 1]) : null;
+
+  if (once) {
+    const files = listWatchFiles(projectRoot);
+    const changed = since
+      ? files.filter(rel => {
+          try { return fs.statSync(path.join(projectRoot, rel)).mtimeMs >= since; }
+          catch { return false; }
+        })
+      : files;
+    const alerts = analyzeWatchChanges(projectRoot, changed);
+    printWatchAlerts(alerts);
+    if (alerts.length === 0) log.ok('watch scan clean');
+    process.exit(alerts.length > 0 ? 1 : 0);
+  }
+
+  log.title('spec-copilot watch');
+  log.info(`项目根目录: ${projectRoot}`);
+  log.info('模式: 报警，不阻断写入');
+  log.info(`扫描间隔: ${intervalMs}ms`);
+  let snapshot = takeWatchSnapshot(projectRoot);
+  log.ok(`baseline ready（${snapshot.size} files）`);
+
+  setInterval(() => {
+    const next = takeWatchSnapshot(projectRoot);
+    const changed = diffWatchSnapshots(snapshot, next);
+    snapshot = next;
+    if (changed.length === 0) return;
+    const alerts = analyzeWatchChanges(projectRoot, changed);
+    printWatchAlerts(alerts);
+  }, intervalMs);
+}
+
 function showHelp() {
   console.log(`
 @alenfitz/spec-copilot — 渐进式 Spec 编码框架（多工具统一版）
@@ -3202,6 +3414,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot update [--force]            升级框架
   npx @alenfitz/spec-copilot sync [--tool <name>] [--force]  同步适配器文件
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
+  npx @alenfitz/spec-copilot watch [--once]              监测绕过流程的源码变更
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
   npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
   npx @alenfitz/spec-copilot scorecard <msg-file>        校验 task commit 自评分卡
@@ -3220,6 +3433,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot install --tool all
   npx @alenfitz/spec-copilot sync --force
   npx @alenfitz/spec-copilot gate user-login apply
+  npx @alenfitz/spec-copilot watch
   npx @alenfitz/spec-copilot doctor
 `);
 }
@@ -3252,6 +3466,9 @@ switch (cmd) {
     break;
   case 'ci':
     cmdCI(args.slice(1));
+    break;
+  case 'watch':
+    cmdWatch(args.slice(1));
     break;
   case 'sync':
     cmdSync(args.slice(1));
