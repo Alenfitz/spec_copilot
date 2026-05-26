@@ -31,6 +31,12 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 
 > E2E 使用系统已安装的 Chrome。🔴 复杂需求中，Chrome/Playwright 不可用或 `--no-e2e` 都会视为未验证，不能通过 smoke；轻量/中等需求会标记为降级证据。
 
+### 生命周期账本记录
+
+- smoke 阶段必须把验证环境、无法执行的验证项、外部依赖限制写入 `log.md` 的 `验证限制记录`。
+- 如果某项能力因为环境/依赖原因只能部分验证，必须同步写入 `风险与遗留记录`，不能只在对话里解释。
+- reviewer 会读取这些区块；未记录的验证限制，不得作为“已说明”的依据。
+
 > gate 通过后会写入 CLI 签发的 `.gate-smoke-passed`，后续 review 会校验该证据是否仍匹配当前文件，手写哨兵无效。
 
 **gate 未通过 → /spec:fix，不执行后续。**

@@ -34,6 +34,8 @@ description: 补充自动化测试
    ```
 4. 全部通过后 commit：`[变更名] test: 补充自动化测试（<N> 用例）`
 5. 记录到 log.md
+   - 测试覆盖限制或未覆盖风险 → 写入 `风险与遗留记录`
+   - 依赖环境/测试数据限制 → 写入 `验证限制记录`
 6. 运行 `npx @alenfitz/spec-copilot gate <变更名> test --record-pass` 写入 test 哨兵，供 archive gate 校验
 
 > 注意：v4.0.17 起 test 哨兵会绑定当前 `spec.md/tasks.md/log.md/source` 哈希。必须先写完整测试报告和 log，再执行 `--record-pass`；执行后再改文件会让 archive 阶段判定证据失效。

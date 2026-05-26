@@ -43,6 +43,12 @@ Write: spec_copilot/changes/<变更名>/tasks.md
 - `log.md` — 以 `spec_copilot/changes/templates/log.md` 为模板，**原样写入**
 - `tasks.md` — 以 `spec_copilot/changes/templates/tasks.md` 为模板
 
+### 生命周期账本初始化
+
+- propose 阶段负责初始化 `log.md` 生命周期账本。
+- 如果存在材料缺失、默认假设、待用户补充的信息，必须写入 `log.md` 的 `假设记录`。
+- 如果用户在 propose 阶段已经明确做出范围取舍或补充材料，必须写入 `用户决策记录`，不能只留在对话里。
+
 ### 矩阵必填（gate 会自动消费）
 
 spec.md 中必须填写：

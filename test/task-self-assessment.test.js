@@ -33,7 +33,12 @@ function runGate(projectRoot, name, phase) {
 }
 
 function setupChange(dir, tasksBody, options = {}) {
-  const { decisionRows = '| 无 | | | | | |' } = options;
+  const {
+    decisionRows = '| 无 | | | | | |',
+    assumptionRows = '| 无 | | | | |',
+    verificationRows = '| 无 | | | | |',
+    riskRows = '| 无 | | | | |',
+  } = options;
   execSync(`node "${CLI}" install --tool claude-code`, { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] });
   const changeDir = path.join(dir, 'spec_copilot', 'changes', 'self');
   fs.mkdirSync(changeDir, { recursive: true });
@@ -61,6 +66,21 @@ test
 | ID | 阶段/Task | 类型 | 影响范围 | 用户决策 | 后续处理 |
 |----|-----------|------|----------|----------|----------|
 ${decisionRows}
+
+## 假设记录
+| ID | 阶段 | 假设 | 触发原因 | 当前状态 |
+|----|------|------|----------|----------|
+${assumptionRows}
+
+## 验证限制记录
+| ID | 阶段 | 限制项 | 影响验证 | 当前处理 |
+|----|------|--------|----------|----------|
+${verificationRows}
+
+## 风险与遗留记录
+| ID | 来源 | 风险/遗留 | 影响范围 | 后续计划 |
+|----|------|-----------|----------|----------|
+${riskRows}
 `);
   writeApplySentinel(dir, 'self');
   writeGateSentinel(dir, 'self', 'smoke');
@@ -323,6 +343,49 @@ test('review gate: referenced decision id must exist in log decision ledger', ()
     });
     const out = runGate(dir, 'self', 'review');
     assert.match(out, /引用的用户决策记录不存在于 log\.md：D404/);
+    assert.match(out, /Gate 未通过/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('review gate: complex change requires lifecycle trace ledger sections', () => {
+  const dir = mkTmp();
+  try {
+    setupChange(dir, taskBody());
+    const logPath = path.join(dir, 'spec_copilot', 'changes', 'self', 'log.md');
+    fs.writeFileSync(logPath, `# Log
+## 时间线
+| 时间 | 阶段 | 事件 | 备注 |
+| 2026-05-26 | smoke | 冒烟测试通过 ✓ | mock |
+
+## Spec-Code 偏差记录
+| 偏差点 | Spec 预期 | 实际情况 | 处理方式 |
+| 无 | 无 | 无 | 无 |
+`);
+    const out = runGate(dir, 'self', 'review');
+    assert.match(out, /log\.md 缺少“用户决策记录”区块/);
+    assert.match(out, /log\.md 缺少“验证限制记录”区块/);
+    assert.match(out, /log\.md 缺少“风险与遗留记录”区块/);
+    assert.match(out, /Gate 未通过/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('review gate: accepted degradation must also be reflected in risk ledger', () => {
+  const dir = mkTmp();
+  try {
+    setupChange(dir, taskBody({
+      score: 90,
+      degraded: '外部门户联调等待第三方环境',
+      accepted: '是，见 D001',
+    }), {
+      decisionRows: '| D001 | apply/T1 | 接受降级 | 外部门户联调 | 本轮等待第三方环境 | review 可放行，archive 记录遗留 |',
+      riskRows: '| 无 | | | | |',
+    });
+    const out = runGate(dir, 'self', 'review');
+    assert.match(out, /存在用户接受降级，但 log\.md “风险与遗留记录”为空/);
     assert.match(out, /Gate 未通过/);
   } finally {
     cleanup(dir);

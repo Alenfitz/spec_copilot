@@ -432,7 +432,7 @@ function firstFieldValue(block, labels) {
 function extractDecisionIds(logContent) {
   const ids = new Set();
   if (!logContent) return ids;
-  const decisionSection = logContent.match(/##\s*用户决策记录([\s\S]*?)(?=^##\s|\Z)/m);
+  const decisionSection = extractMarkdownSection(logContent, '用户决策记录');
   const source = decisionSection ? decisionSection[1] : logContent;
   const regex = /\|\s*(D\d{3,})\s*\|/g;
   let m;
@@ -440,6 +440,26 @@ function extractDecisionIds(logContent) {
     ids.add(m[1]);
   }
   return ids;
+}
+
+function extractMarkdownSection(content, title) {
+  if (!content) return null;
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return content.match(new RegExp(`##\\s*${escaped}([\\s\\S]*?)(?=^##\\s|\\Z)`, 'm'));
+}
+
+function sectionHasMeaningfulRows(content, title) {
+  const section = extractMarkdownSection(content, title);
+  if (!section) return false;
+  const body = section[1]
+    .replace(/^\s*>[^\n]*$/gm, '')
+    .replace(/^\s*\|[-\s:|]+\|\s*$/gm, '')
+    .trim();
+  if (!body) return false;
+  const rows = body.split('\n')
+    .map(line => line.trim())
+    .filter(line => line.startsWith('|') && !/^\|\s*[-\s:|]+\|\s*$/.test(line));
+  return rows.some(line => !/（无则写["“]?无["”]?）|\|\s*无\s*\|/i.test(line));
 }
 
 function validateTaskSelfAssessments(tasksContent, logContent = '') {
@@ -1741,18 +1761,45 @@ async function cmdGate(args) {
         }
       }
 
-      // Check: log.md Spec-Code deviation section should not be suspiciously empty for complex changes
-      if (isComplex && fs.existsSync(logPath)) {
+      if (fs.existsSync(logPath)) {
         const logContent = fs.readFileSync(logPath, 'utf-8');
-        const deviationMatch = logContent.match(/Spec-Code 偏差记录[\s\S]*?(?=##|$)/);
-        if (deviationMatch) {
-          const deviationSection = deviationMatch[0].replace(/Spec-Code 偏差记录/, '').trim();
-          const hasContent = deviationSection.replace(/[-\s|>*]/g, '').length > 5;
-          if (!hasContent) {
+
+        if (isComplex) {
+          if (!extractMarkdownSection(logContent, '用户决策记录')) {
+            fail('log.md 缺少“用户决策记录”区块 — 后续 reviewer 无法读取执行中的用户选择', 'TRACE_LEDGER');
+          } else {
+            log.ok('log.md 用户决策记录区块存在');
+          }
+
+          if (!extractMarkdownSection(logContent, '验证限制记录')) {
+            fail('log.md 缺少“验证限制记录”区块 — 后续无法区分未验证与已验证', 'TRACE_LEDGER');
+          } else {
+            log.ok('log.md 验证限制记录区块存在');
+          }
+
+          if (!extractMarkdownSection(logContent, '风险与遗留记录')) {
+            fail('log.md 缺少“风险与遗留记录”区块 — archive 无法保留真实遗留项', 'TRACE_LEDGER');
+          } else {
+            log.ok('log.md 风险与遗留记录区块存在');
+          }
+
+          if (!sectionHasMeaningfulRows(logContent, 'Spec-Code 偏差记录')) {
             log.warn('⚠️  log.md Spec-Code 偏差记录为空 — 🔴 复杂需求应关注是否存在未记录的偏差');
           } else {
             log.ok('log.md Spec-Code 偏差记录已填写');
           }
+
+          if (!sectionHasMeaningfulRows(logContent, '假设记录')) {
+            log.warn('⚠️  log.md 假设记录为空 — 如存在材料缺失或默认假设，应明确登记');
+          } else {
+            log.ok('log.md 假设记录已填写');
+          }
+        }
+
+        const hasAcceptedDegradation = /用户确认接受降级[：:]\s*(?:是|已确认|true|yes|y|✅)/i.test(logContent)
+          || (fs.existsSync(tasksPath) && /用户确认接受降级[：:]\s*(?:是|已确认|true|yes|y|✅)/i.test(fs.readFileSync(tasksPath, 'utf-8')));
+        if (hasAcceptedDegradation && !sectionHasMeaningfulRows(logContent, '风险与遗留记录')) {
+          fail('存在用户接受降级，但 log.md “风险与遗留记录”为空 — 不能把降级项写成无遗留', 'TRACE_LEDGER');
         }
       }
 
@@ -2297,6 +2344,8 @@ async function cmdGate(args) {
             failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
           { name: 'Task 自评', code: 'TASK_SELF_ASSESSMENT', weight: 8,
             failPatterns: [/Task 自评闭环检测失败/] },
+          { name: '过程账本', code: 'TRACE_LEDGER', weight: 8,
+            failPatterns: [/log\.md 缺少.*区块/, /存在用户接受降级，但 log\.md “风险与遗留记录”为空/] },
           { name: '功能点覆盖', code: 'FEATURE_COVERAGE', weight: 14,
             failPatterns: [/覆盖率.*低于/, /功能点覆盖率/],
             skipPatterns: [/非 git 仓库.*跳过功能点覆盖率/] },
