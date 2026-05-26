@@ -35,9 +35,10 @@ description: 归档变更 + 知识沉淀
 ### Step 1-4：常规归档动作
 1. 根据 retrospective-extractor 报告，逐条展示**入选的 knowledge 候选**给用户，确认后写入 `spec_copilot/knowledge/index.md`（带 tag）
 2. 如有 Rules 更新建议，单独询问用户是否落地
-3. 更新 spec.md status → done
-4. 移动 `spec_copilot/changes/<变更名>/` → `spec_copilot/archives/<YYYY-MM>/<变更名>/`
-5. 提示合并分支：`git merge feature/<变更名> --no-ff`
+3. 复核 log.md `用户决策记录`：接受降级/需求变更必须在归档摘要中保留，不得写成"全部完成"
+4. 更新 spec.md status → done
+5. 移动 `spec_copilot/changes/<变更名>/` → `spec_copilot/archives/<YYYY-MM>/<变更名>/`
+6. 提示合并分支：`git merge feature/<变更名> --no-ff`
 
 ## 自动生成/更新项目文档
 

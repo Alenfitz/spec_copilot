@@ -30,6 +30,7 @@ Agent({
 输入：
 - spec.md: spec_copilot/changes/<变更名>/spec.md
 - tasks.md: spec_copilot/changes/<变更名>/tasks.md
+- log.md: spec_copilot/changes/<变更名>/log.md（必须读取"用户决策记录"）
 - 项目根目录: <当前 cwd>
 
 按 profile 执行，严格按输出格式返回报告。`
@@ -43,6 +44,13 @@ Agent({
 **子 agent 返回后，主 agent 不得 override 或软化结论。**
 
 阶段一不通过（功能点覆盖率太低或有 Critical 不一致）→ 返回 `/spec:fix`。
+
+### 用户决策记录作为审查输入
+
+- reviewer 必须读取 log.md `用户决策记录`。
+- 已记录的 Dxxx 决策可解释实现选择或用户接受降级，但不能自动删除 spec 需求。
+- 如果 Dxxx 属于"接受降级"，review 报告必须把它列为已确认遗留，而不是当作完全完成。
+- 如果 Dxxx 实质改变需求范围，review 必须要求回到 `/spec:propose` 或 amend 流程，不能靠降级记录绕过 spec contract。
 
 ## 阶段二：Code Quality
 

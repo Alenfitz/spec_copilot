@@ -382,27 +382,115 @@ function validateGateEvidence(projectRoot, changeName, phase, sentinelPath) {
   return { pass: true, data };
 }
 
+function isNoneLike(value) {
+  const normalized = String(value || '')
+    .replace(/[，。；;,.]/g, '')
+    .replace(/[`*_|\s]/g, '')
+    .toLowerCase();
+  return ['无', 'none', 'n/a', 'na', '不适用'].includes(normalized);
+}
+
 function hasExplicitIncompleteDeclaration(text) {
   if (!text) return false;
   const trimmed = text.trim();
   if (!trimmed) return false;
 
-  const noneValue = (value) => {
-    const normalized = value
-      .replace(/[，。；;,.]/g, '')
-      .replace(/[`*_|\s]/g, '')
-      .toLowerCase();
-    return ['无', 'none', 'n/a', 'na', '不适用'].includes(normalized);
-  };
-
   const fieldMatch = trimmed.match(/(?:未实现功能点|本\s*task\s*未完成的功能点|已知缺陷(?:或\s*TODO)?|简化或降级处理|简化\/降级处理)[^\n]*[：:]\s*(.+)$/i);
   if (fieldMatch) {
-    return !noneValue(fieldMatch[1]);
+    return !isNoneLike(fieldMatch[1]);
   }
 
   // 只把审查结论里的显式缺口/stub 视为阻断，避免误伤需求本身允许的"PDF 占位"描述。
   if (/禁止|不得|不能|检测|说明|示例|模板/.test(trimmed)) return false;
   return /(?:^|\|)\s*(?:❌|⚠️|stub|API stubs only|未实现|未完成|未做|待实现|待补齐|skipped)/i.test(trimmed);
+}
+
+function parseTaskReviewBlocks(tasksContent) {
+  if (!tasksContent) return [];
+  return tasksContent
+    .split(/(?=^##\s+Task\s+\d+)/m)
+    .filter(block => /^##\s+Task\s+\d+/m.test(block))
+    .map((block) => {
+      const titleMatch = block.match(/^##\s+(Task\s+\d+)[^\n]*/m);
+      return {
+        name: titleMatch ? titleMatch[1].replace(/\s+/g, ' ') : 'Task ?',
+        block,
+        done: /状态[：:]\s*(?:✅|已完成|完成|已交付|done)/i.test(block),
+      };
+    });
+}
+
+function firstFieldValue(block, labels) {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const lineMatch = block.match(new RegExp(`${escaped}[^\\n]*?[：:]\\s*([^\\n]*)`, 'i'));
+    if (lineMatch) return (lineMatch[1] || '').trim();
+  }
+  return null;
+}
+
+function extractDecisionIds(logContent) {
+  const ids = new Set();
+  if (!logContent) return ids;
+  const decisionSection = logContent.match(/##\s*用户决策记录([\s\S]*?)(?=^##\s|\Z)/m);
+  const source = decisionSection ? decisionSection[1] : logContent;
+  const regex = /\|\s*(D\d{3,})\s*\|/g;
+  let m;
+  while ((m = regex.exec(source)) !== null) {
+    ids.add(m[1]);
+  }
+  return ids;
+}
+
+function validateTaskSelfAssessments(tasksContent, logContent = '') {
+  const blocks = parseTaskReviewBlocks(tasksContent);
+  const failures = [];
+  const checked = [];
+  const decisionIds = extractDecisionIds(logContent);
+
+  for (const task of blocks) {
+    if (!task.done) continue;
+    checked.push(task.name);
+
+    const accepted = /用户确认接受降级[：:]\s*(?:是|已确认|true|yes|y|✅)/i.test(task.block);
+    const acceptedRefs = [...task.block.matchAll(/\bD\d{3,}\b/g)].map(m => m[0]);
+    if (accepted) {
+      if (acceptedRefs.length === 0) {
+        failures.push(`${task.name}: 用户确认接受降级但未引用 Dxxx 用户决策记录`);
+      } else {
+        const missingRefs = [...new Set(acceptedRefs)].filter(id => !decisionIds.has(id));
+        if (missingRefs.length > 0) {
+          failures.push(`${task.name}: 引用的用户决策记录不存在于 log.md：${missingRefs.join(', ')}`);
+        }
+      }
+    }
+    const scoreMatch = task.block.match(/自评分[^\n]*?[：:]\s*(\d{1,3})\s*\/\s*100/i);
+    if (!scoreMatch) {
+      failures.push(`${task.name}: 已完成但缺少自评分（必须填写 0-100）`);
+    } else {
+      const score = parseInt(scoreMatch[1], 10);
+      if (score < 100 && !accepted) {
+        failures.push(`${task.name}: 自评分 ${score}/100，低于 100 不能静默进入下一 task`);
+      }
+    }
+
+    const incomplete = firstFieldValue(task.block, ['本 task 未完成的功能点', '未完成的功能点', '未实现功能点']);
+    const defects = firstFieldValue(task.block, ['已知缺陷或 TODO', '已知缺陷', '遗留 TODO']);
+    const degraded = firstFieldValue(task.block, ['简化或降级处理', '简化/降级处理']);
+
+    for (const [label, value] of [
+      ['未完成功能点', incomplete],
+      ['已知缺陷/TODO', defects],
+      ['简化或降级处理', degraded],
+    ]) {
+      if (value === null) continue; // 兼容旧模板，字段不存在时交给其它完整性检查处理。
+      if (!isNoneLike(value) && !accepted) {
+        failures.push(`${task.name}: ${label} 非“无”但缺少用户确认接受降级`);
+      }
+    }
+  }
+
+  return { checked, failures };
 }
 
 /** 解析 --tool 参数，支持 --tool all 和 --tool cursor,claude-code */
@@ -1243,6 +1331,14 @@ async function cmdGate(args) {
         if (pendingTasks.length > 0) {
           fail(`tasks.md 中有 ${pendingTasks.length} 个未完成 task`);
         }
+
+        const logContentForDecisions = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : '';
+        const selfAssessment = validateTaskSelfAssessments(tasksContent, logContentForDecisions);
+        if (selfAssessment.failures.length > 0) {
+          fail(`Task 自评闭环检测失败：\n   ${selfAssessment.failures.slice(0, 20).join('\n   ')}${selfAssessment.failures.length > 20 ? `\n   ... 还有 ${selfAssessment.failures.length - 20} 项` : ''}\n   处理方式：继续修复当前 task，或让用户明确接受降级并记录到 log.md。`, 'TASK_SELF_ASSESSMENT');
+        } else if (selfAssessment.checked.length > 0) {
+          passOk(`Task 自评闭环：${selfAssessment.checked.length} 个已完成 task 均为 100/100 或已获用户确认降级`, 'TASK_SELF_ASSESSMENT');
+        }
       }
 
       // ─── 程序化覆盖率检查：spec 功能点 → 代码实现（加权：前+后端均有 = 1 分；仅后端 = 0.5；仅前端 = 0.5；都无 = 0） ───
@@ -1691,6 +1787,20 @@ async function cmdGate(args) {
       for (const f of incompleteFiles) {
         if (!fs.existsSync(f.path)) continue;
         const content = fs.readFileSync(f.path, 'utf-8');
+        if (f.name === 'tasks.md') {
+          for (const task of parseTaskReviewBlocks(content)) {
+            const accepted = /用户确认接受降级[：:]\s*(?:是|已确认|true|yes|y|✅)/i.test(task.block);
+            if (accepted) continue;
+            const lines = task.block.split('\n');
+            lines.forEach((line, idx) => {
+              if (!hasExplicitIncompleteDeclaration(line)) return;
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('>')) return;
+              incompleteHits.push(`${f.name}:${task.name}:${idx + 1} ${trimmed.slice(0, 160)}`);
+            });
+          }
+          continue;
+        }
         const lines = content.split('\n');
         lines.forEach((line, idx) => {
           if (!hasExplicitIncompleteDeclaration(line)) return;
@@ -2185,6 +2295,8 @@ async function cmdGate(args) {
         scoreItems = [
           { name: 'smoke 哨兵', code: 'SMOKE_SENTINEL', weight: 8,
             failPatterns: [/smoke.*哨兵/, /冒烟.*通过/] },
+          { name: 'Task 自评', code: 'TASK_SELF_ASSESSMENT', weight: 8,
+            failPatterns: [/Task 自评闭环检测失败/] },
           { name: '功能点覆盖', code: 'FEATURE_COVERAGE', weight: 14,
             failPatterns: [/覆盖率.*低于/, /功能点覆盖率/],
             skipPatterns: [/非 git 仓库.*跳过功能点覆盖率/] },
