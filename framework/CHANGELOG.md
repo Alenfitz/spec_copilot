@@ -4,6 +4,48 @@
 
 ---
 
+## [4.0.15] - 2026-05-26
+
+### 复杂需求归档门禁收紧
+
+本版本只修复一次真实项目复盘暴露出的硬约束缺口，不扩大声明范围：
+
+#### 🔴 复杂需求必须经过 test 阶段
+
+- `/spec:flow` 从 `propose → apply → smoke → review → archive` 调整为 `propose → apply → smoke → review → test → archive`
+- `/spec:test` 要求测试全部通过后执行 `gate <name> test --record-pass`
+- `gate test --record-pass` 会写入 `.gate-test-passed`
+- `gate archive` 对 🔴 复杂需求强制检查 `.gate-test-passed`
+
+效果：复杂需求不能只靠 review 通过就直接归档。
+
+#### archive 防绕过文案加固
+
+`/spec:archive` 明确 gate archive 未通过时必须立即停止，禁止提前执行 Step 0 知识提取、更新 status、移动目录或生成 docs。
+
+效果：降低模型用“先做知识提取”绕过 archive gate 的空间。
+
+#### 未完成声明阻断 review/archive
+
+`gate review` 和 `gate archive` 增加显式未完成声明检测：
+
+- `未实现功能点: <非无>`
+- `已知缺陷或 TODO: <非无>`
+- `简化或降级处理: <非无>`
+- 审查结论中的 `stub`、`API stubs only`、`未实现` 等缺口表述
+
+效果：不能一边承认未实现/stub，一边把需求标成通过或实质归档。
+
+### 测试
+
+新增：
+- `test/complex-test-archive-gate.test.js`
+- `test/spec-flow.test.js` 增补 flow 必经 test 的合约测试
+
+测试通过：93 / 93
+
+---
+
 ## [4.0.14] - 2026-05-25
 
 ### 发布收尾

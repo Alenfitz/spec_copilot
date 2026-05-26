@@ -41,11 +41,17 @@ test('flow.md: 必须明确是"逐 task 停顿"的显式豁免', () => {
     'flow.md 应明确这是逐 task 停顿规则的显式例外');
 });
 
-test('flow.md: 必须包含完整流水线五阶段', () => {
-  const phases = ['propose', 'apply', 'smoke', 'review', 'archive'];
+test('flow.md: 必须包含完整流水线六阶段', () => {
+  const phases = ['propose', 'apply', 'smoke', 'review', 'test', 'archive'];
   for (const phase of phases) {
     assert.ok(new RegExp(phase, 'i').test(flowMd), `flow.md 应包含 ${phase} 阶段`);
   }
+});
+
+test('flow.md: 🔴 复杂需求必须 review 后进入 test，不能直接 archive', () => {
+  assert.ok(/Phase 5:\s*Test/i.test(flowMd), 'flow.md 应包含 Phase 5: Test');
+  assert.ok(/复杂需求必须经过 Phase 5 Test|禁止 review 后直接 archive/.test(flowMd),
+    'flow.md 应明确复杂需求禁止 review 后直接 archive');
 });
 
 test('flow.md: 任一步骤失败即停，不继续', () => {

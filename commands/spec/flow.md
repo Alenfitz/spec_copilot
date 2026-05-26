@@ -1,5 +1,5 @@
 ---
-description: 全自动完整版流水线 — propose → apply → smoke → review → archive
+description: 全自动完整版流水线 — propose → apply → smoke → review → test → archive
 ---
 
 # /flow — 全自动完整版流水线
@@ -17,7 +17,7 @@ description: 全自动完整版流水线 — propose → apply → smoke → rev
 适用场景：
 - 用户明确授权 AI 自动推进
 - 需求边界清晰，允许跳过逐 task 停顿
-- 需要完整留痕（spec/tasks/log + smoke + review + archive）
+- 需要完整留痕（spec/tasks/log + smoke + review + test + archive）
 
 复杂度约束：
 - 🟢 轻量需求：建议改用 `/spec:lite`
@@ -80,7 +80,22 @@ description: 全自动完整版流水线 — propose → apply → smoke → rev
 
 ---
 
-### Phase 5: Archive
+### Phase 5: Test
+
+1. 运行 `npx @alenfitz/spec-copilot gate <变更名> test`
+2. 按 spec §8 测试策略补充自动化测试：
+   - 正向路径
+   - 边界条件
+   - 异常路径
+3. 运行全部测试，并把测试报告记录到 `log.md`
+4. 测试全部通过后，运行 `npx @alenfitz/spec-copilot gate <变更名> test --record-pass`
+5. 评估结果：
+   - 通过 → 执行 Phase 6
+   - 失败 → 🛑 **停下来**，输出失败详情，提示：*"测试失败，请检查后说'继续'或 /spec:fix"*
+
+---
+
+### Phase 6: Archive
 
 1. 运行 `npx @alenfitz/spec-copilot gate <变更名> archive`
 2. 逐条展示 log.md "知识发现"，自动将可沉淀的写入 `spec_copilot/knowledge/index.md`
@@ -93,7 +108,7 @@ description: 全自动完整版流水线 — propose → apply → smoke → rev
 需求 [变更名] 已完成 ✓
 
 复杂度：🔴 重
-耗时阶段：propose → apply → smoke → review → archive
+耗时阶段：propose → apply → smoke → review → test → archive
 改动文件：<N> 个
 知识沉淀：<N> 条
 
@@ -105,6 +120,7 @@ description: 全自动完整版流水线 — propose → apply → smoke → rev
 
 - 逐阶段输出进度标题（`## Phase N: ...`），不跳步
 - 任一步骤失败立即停，不继续后续阶段
+- 🔴 复杂需求必须经过 Phase 5 Test，禁止 review 后直接 archive
 - 🟢 轻量需求直接引导到 `/spec:lite`
 - 仅在用户明确使用 `/spec:flow` 时跳过逐 task 停顿
 - §9 有未解决项直接拒绝

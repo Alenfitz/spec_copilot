@@ -174,6 +174,37 @@ function buildFeatureAcceptanceTrace(specContent) {
   return trace;
 }
 
+function readJsonSafe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function hasExplicitIncompleteDeclaration(text) {
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const noneValue = (value) => {
+    const normalized = value
+      .replace(/[，。；;,.]/g, '')
+      .replace(/[`*_|\s]/g, '')
+      .toLowerCase();
+    return ['无', 'none', 'n/a', 'na', '不适用'].includes(normalized);
+  };
+
+  const fieldMatch = trimmed.match(/(?:未实现功能点|本\s*task\s*未完成的功能点|已知缺陷(?:或\s*TODO)?|简化或降级处理|简化\/降级处理)[^\n]*[：:]\s*(.+)$/i);
+  if (fieldMatch) {
+    return !noneValue(fieldMatch[1]);
+  }
+
+  // 只把审查结论里的显式缺口/stub 视为阻断，避免误伤需求本身允许的"PDF 占位"描述。
+  if (/禁止|不得|不能|检测|说明|示例|模板/.test(trimmed)) return false;
+  return /(?:^|\|)\s*(?:❌|⚠️|stub|API stubs only|未实现|未完成|未做|待实现|待补齐|skipped)/i.test(trimmed);
+}
+
 /** 解析 --tool 参数，支持 --tool all 和 --tool cursor,claude-code */
 function resolveAdapters(args, projectRoot) {
   const toolIdx = args.indexOf('--tool');
@@ -1392,6 +1423,31 @@ async function cmdGate(args) {
         }
       }
 
+      // ─── 反"太嗨"机制 0：显式未完成声明阻断 ───
+      // 只要任务或审查结论中承认有未实现/占位/stub，就不能继续 review 通过。
+      const incompleteHits = [];
+      const incompleteFiles = [
+        { path: specPath, name: 'spec.md' },
+        { path: tasksPath, name: 'tasks.md' },
+        { path: logPath, name: 'log.md' }
+      ];
+      for (const f of incompleteFiles) {
+        if (!fs.existsSync(f.path)) continue;
+        const content = fs.readFileSync(f.path, 'utf-8');
+        const lines = content.split('\n');
+        lines.forEach((line, idx) => {
+          if (!hasExplicitIncompleteDeclaration(line)) return;
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('>')) return;
+          incompleteHits.push(`${f.name}:${idx + 1} ${trimmed.slice(0, 160)}`);
+        });
+      }
+      if (incompleteHits.length > 0) {
+        fail(`显式未完成声明检测命中（未实现/占位/stub 不能计入完成）：\n   ${incompleteHits.slice(0, 20).join('\n   ')}${incompleteHits.length > 20 ? `\n   ... 还有 ${incompleteHits.length - 20} 项` : ''}`, 'INCOMPLETE_DECLARATION');
+      } else {
+        passOk('显式未完成声明检测：clean', 'INCOMPLETE_DECLARATION');
+      }
+
       // ─── 反"太嗨"机制 1：嗨语言检测 ───
       const HYPE_WORDS = [
         '基本完成', '大部分', '核心已实现', '完美', '圆满', '非常好',
@@ -1737,6 +1793,22 @@ async function cmdGate(args) {
       } else {
         fail('spec.md §12 审查结论未通过或未填写');
       }
+
+      if (isComplex) {
+        const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf-8') : '';
+        const hasTestReport = /测试报告|总计：?\s*\d+\s*个用例|Tests run:|BUILD SUCCESS|npm (run )?test|vitest/i.test(logContent);
+        const wantsRecordPass = args.includes('--record-pass');
+
+        if (!hasTestReport) {
+          fail('🔴 复杂需求缺少测试报告记录 — 请先执行 /spec:test 并把测试结果写入 log.md');
+        } else {
+          log.ok('测试报告记录已存在');
+        }
+
+        if (!wantsRecordPass) {
+          log.warn('test gate 预检通过后，还需在测试全部通过后运行 `gate <name> test --record-pass` 写入 test 哨兵');
+        }
+      }
       break;
     }
     case 'archive': {
@@ -1745,6 +1817,40 @@ async function cmdGate(args) {
         log.ok('spec.md §12 审查结论为通过');
       } else {
         fail('spec.md §12 审查结论未通过');
+      }
+
+      if (isComplex) {
+        const testSentinel = path.join(changeDir, '.gate-test-passed');
+        if (!fs.existsSync(testSentinel)) {
+          fail('🔴 复杂需求缺少 .gate-test-passed 哨兵 — review 后必须执行 /spec:test，不能直接 archive');
+        } else {
+          const sentinelData = readJsonSafe(testSentinel);
+          if (sentinelData?.timestamp) {
+            const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
+            log.ok(`test gate 哨兵有效（${ageMin} 分钟前 / framework v${sentinelData.version || 'unknown'}）`);
+          } else {
+            log.ok('test gate 哨兵有效');
+          }
+        }
+      }
+
+      const archiveDocs = [
+        { path: specPath, name: 'spec.md' },
+        { path: tasksPath, name: 'tasks.md' },
+        { path: logPath, name: 'log.md' }
+      ];
+      const archiveIncompleteHits = [];
+      for (const f of archiveDocs) {
+        if (!fs.existsSync(f.path)) continue;
+        const content = fs.readFileSync(f.path, 'utf-8');
+        content.split('\n').forEach((line, idx) => {
+          if (hasExplicitIncompleteDeclaration(line)) {
+            archiveIncompleteHits.push(`${f.name}:${idx + 1} ${line.trim().slice(0, 160)}`);
+          }
+        });
+      }
+      if (archiveIncompleteHits.length > 0) {
+        fail(`归档阻断：仍存在未实现/占位/stub 声明，不能实质归档：\n   ${archiveIncompleteHits.slice(0, 20).join('\n   ')}${archiveIncompleteHits.length > 20 ? `\n   ... 还有 ${archiveIncompleteHits.length - 20} 项` : ''}`);
       }
 
       // 2. 必须有 review gate 通过的哨兵文件（防止模型自己写"通过"绕过 review gate）
@@ -1942,10 +2048,14 @@ async function cmdGate(args) {
 
   console.log('');
   if (pass) {
-    // 成功通过 smoke/review gate → 写哨兵
-    if (phase === 'smoke' || phase === 'review') {
+    // 成功通过 smoke/review/test gate → 写哨兵
+    if (phase === 'smoke' || phase === 'review' || (phase === 'test' && args.includes('--record-pass'))) {
       try {
-        const sentinelName = phase === 'smoke' ? '.gate-smoke-passed' : '.gate-review-passed';
+        const sentinelName = phase === 'smoke'
+          ? '.gate-smoke-passed'
+          : phase === 'review'
+            ? '.gate-review-passed'
+            : '.gate-test-passed';
         const sentinelPath = path.join(changeDir, sentinelName);
         fs.writeFileSync(sentinelPath, JSON.stringify({
           timestamp: Date.now(),
@@ -1965,8 +2075,12 @@ async function cmdGate(args) {
     process.exit(0);
   } else {
     // gate 失败 → 清除可能存在的旧哨兵
-    if (phase === 'smoke' || phase === 'review') {
-      const sentinelName = phase === 'smoke' ? '.gate-smoke-passed' : '.gate-review-passed';
+    if (phase === 'smoke' || phase === 'review' || phase === 'test') {
+      const sentinelName = phase === 'smoke'
+        ? '.gate-smoke-passed'
+        : phase === 'review'
+          ? '.gate-review-passed'
+          : '.gate-test-passed';
       const sentinelPath = path.join(changeDir, sentinelName);
       if (fs.existsSync(sentinelPath)) {
         try { fs.unlinkSync(sentinelPath); } catch {}

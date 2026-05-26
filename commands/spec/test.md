@@ -34,6 +34,7 @@ description: 补充自动化测试
    ```
 4. 全部通过后 commit：`[变更名] test: 补充自动化测试（<N> 用例）`
 5. 记录到 log.md
+6. 运行 `npx @alenfitz/spec-copilot gate <变更名> test --record-pass` 写入 test 哨兵，供 archive gate 校验
 
 ## 结束后
 

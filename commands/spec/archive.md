@@ -10,6 +10,11 @@ description: 归档变更 + 知识沉淀
 
 运行 `npx @alenfitz/spec-copilot gate <变更名> archive`（跨平台门禁检查）
 
+**硬性顺序**：
+- gate archive 未通过时，必须立即停止
+- gate archive 未通过时，禁止执行 Step 0 知识提取
+- gate archive 未通过时，禁止更新 status、移动目录、生成 docs
+
 必做步骤：
 
 ### Step 0：调用 retrospective-extractor agent 提炼真正值得沉淀的教训
