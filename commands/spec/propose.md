@@ -18,6 +18,12 @@ description: 发起变更提案（评估复杂度、生成 spec）
 🟢 轻量需求 → 输出"建议使用 /spec:lite"后结束。
 🔴 重量需求 → 进入 Step 1，**不等用户确认**。
 
+## 阶段锁
+
+- `/spec:propose` 的职责是产出 spec/tasks/log，不是直接编码。
+- 即使用户在同一条消息里要求"把开发也一起做完"，也必须先完成本命令，停在 `/spec:apply`。
+- 只要 `spec.md + tasks.md + log.md` 还没落盘，就禁止写业务代码。
+
 ## Step 1 — Research
 
 Grep/Read 现有代码和 knowledge/。
@@ -53,6 +59,8 @@ spec.md 中必须填写：
   spec 已就绪 ✓
   → 下一步：/spec:apply <变更名>
   ```
+
+> 输出到这里必须停止。不得因为用户催促而直接进入 apply 或 flow。
 
 ## Step 4 — Lint
 

@@ -60,6 +60,11 @@ function obfuscateFile(srcPath, destPath) {
   fs.writeFileSync(destPath, LICENSE_HEADER + obfuscated, 'utf-8');
 }
 
+function copyJsFile(srcPath, destPath) {
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.copyFileSync(srcPath, destPath);
+}
+
 function copyDir(src, dest) {
   if (!fs.existsSync(src)) return;
   fs.mkdirSync(dest, { recursive: true });
@@ -79,7 +84,9 @@ console.log('Obfuscating JS...');
 obfuscateFile(path.join(root, 'bin', 'cli.js'), path.join(dist, 'bin', 'cli.js'));
 obfuscateFile(path.join(root, 'bin', 'fs-utils.js'), path.join(dist, 'bin', 'fs-utils.js'));
 obfuscateFile(path.join(root, 'bin', 'frontend-checks.js'), path.join(dist, 'bin', 'frontend-checks.js'));
-obfuscateFile(path.join(root, 'bin', 'e2e-smoke.js'), path.join(dist, 'bin', 'e2e-smoke.js'));
+// E2E smoke is validation infrastructure. Keep it plain to avoid obfuscation
+// breaking Playwright runtime behavior and producing false validation failures.
+copyJsFile(path.join(root, 'bin', 'e2e-smoke.js'), path.join(dist, 'bin', 'e2e-smoke.js'));
 obfuscateFile(path.join(root, 'bin', 'guard.js'), path.join(dist, 'bin', 'guard.js'));
 obfuscateFile(path.join(root, 'bin', 'review-checks.js'), path.join(dist, 'bin', 'review-checks.js'));
 obfuscateFile(path.join(root, 'bin', 'ci-gen.js'), path.join(dist, 'bin', 'ci-gen.js'));

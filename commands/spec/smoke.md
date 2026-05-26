@@ -8,6 +8,8 @@ description: 冒烟验证（构建 + 骨架检测 + E2E 浏览器联调）
 
 ## Step 0 — 程序化 gate 检查
 
+> 先把即将写入的 smoke 结论追加到 `log.md`，再运行 gate。v4.0.17 起 gate 通过记录会绑定 `spec.md/tasks.md/log.md/source` 哈希；gate 后再改 log 会让 review 阶段判定 smoke 证据失效。
+
 ```bash
 npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 ```
@@ -25,9 +27,11 @@ npx @alenfitz/spec-copilot gate $ARGUMENTS smoke
 - `--headed` 显示浏览器
 - `--base-url http://...` 手动指定前端
 - `--backend-url http://...` 手动指定后端
-- `--no-e2e` 跳过 E2E
+- `--no-e2e` 跳过 E2E（仅适合轻量/中等需求；🔴 复杂需求会阻断 smoke）
 
-> E2E 使用系统已安装的 Chrome，无 Chrome 时自动跳过（不阻断）。
+> E2E 使用系统已安装的 Chrome。🔴 复杂需求中，Chrome/Playwright 不可用或 `--no-e2e` 都会视为未验证，不能通过 smoke；轻量/中等需求会标记为降级证据。
+
+> gate 通过后会写入 CLI 签发的 `.gate-smoke-passed`，后续 review 会校验该证据是否仍匹配当前文件，手写哨兵无效。
 
 **gate 未通过 → /spec:fix，不执行后续。**
 
@@ -44,7 +48,7 @@ E2E 已通过时此步骤为确认性检查。
 
 ## 结束后
 
-1. **写 log.md**：在 `## 时间线` 表格追加 `| 当前时间 | smoke | 冒烟通过 ✓ |`
+1. 确认 `.gate-smoke-passed` 已由 CLI 写入。
 2. 输出：
 
 **通过**：

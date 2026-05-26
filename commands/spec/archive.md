@@ -14,6 +14,7 @@ description: 归档变更 + 知识沉淀
 - gate archive 未通过时，必须立即停止
 - gate archive 未通过时，禁止执行 Step 0 知识提取
 - gate archive 未通过时，禁止更新 status、移动目录、生成 docs
+- v4.0.17 起，archive 会校验 `.gate-review-passed` / `.gate-test-passed` 是否为 CLI 签发且仍匹配当前 `spec.md/tasks.md/log.md/source`；手写哨兵或 gate 后改文件都会失败
 
 必做步骤：
 

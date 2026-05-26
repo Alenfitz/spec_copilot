@@ -13,6 +13,7 @@ npx @alenfitz/spec-copilot gate <变更名> review
 ```
 
 gate review 自动执行：
+- **smoke 证据校验**：`.gate-smoke-passed` 必须由 CLI 签发，且仍匹配当前 `spec.md/tasks.md/log.md/source`
 - **API 契约校验**：spec §6.1 接口矩阵 → 前端调用 + 后端实现匹配
 - **契约一致性**：前端请求字段 vs 后端必填字段
 - **错误处理审计**：所有 API 调用点是否有 catch

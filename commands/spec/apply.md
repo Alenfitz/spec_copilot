@@ -12,6 +12,12 @@ description: 执行编码（逐 task 推进，每个 task 停顿等确认）
 2. Gate 通过 → `git checkout -b feature/<变更名>`（如已在分支则跳过）
 3. 告知用户当前分支
 
+## 阶段锁
+
+- `/spec:apply` 只能在 `spec.md + tasks.md + log.md` 已存在且 apply gate 通过后进入。
+- 如果用户没有先走 `/spec:propose`，不得自行脑补 spec 后直接编码。
+- 用户即使说"全部执行"、"不要停顿"，也必须遵守本命令的逐 task 停顿；唯一例外只有用户**显式**使用 `/spec:flow`。
+
 ## 逐 task 执行（铁律：一个 task 一停）
 
 > 🛑 **完成一个 task 后必须完全停止，等用户说"继续"才执行下一个。**

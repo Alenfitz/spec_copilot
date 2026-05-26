@@ -18,6 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { adapters, detectTools, supportedTools, parseAgentMeta, detectStack, buildStackContext } = require('../adapters');
 const {
@@ -180,6 +181,147 @@ function readJsonSafe(filePath) {
   } catch {
     return null;
   }
+}
+
+function sha256(text) {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+function hashFileSafe(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  return sha256(fs.readFileSync(filePath));
+}
+
+function shouldSkipEvidenceFile(relPath, changeName) {
+  const rel = relPath.replace(/\\/g, '/');
+  const first = rel.split('/')[0];
+  if (
+    rel === '.git' ||
+    rel.startsWith('.git/') ||
+    rel.includes('/.git/') ||
+    first === 'node_modules' ||
+    rel.includes('/node_modules/') ||
+    first === 'dist' ||
+    rel.includes('/dist/') ||
+    first === 'target' ||
+    rel.includes('/target/') ||
+    first === 'build' ||
+    rel.includes('/build/') ||
+    first === 'coverage' ||
+    rel.includes('/coverage/') ||
+    first === '.next' ||
+    rel.includes('/.next/') ||
+    first === '.nuxt' ||
+    rel.includes('/.nuxt/') ||
+    rel.startsWith('.spec-copilot/screenshots/') ||
+    rel.includes('/.spec-copilot/screenshots/')
+  ) return true;
+  if (/\.DS_Store$/.test(rel)) return true;
+  if (rel.startsWith(`spec_copilot/changes/${changeName}/.gate-`)) return true;
+  return false;
+}
+
+function listEvidenceFiles(root, changeName) {
+  const files = [];
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(root, full).replace(/\\/g, '/');
+      if (shouldSkipEvidenceFile(rel, changeName)) continue;
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile()) {
+        files.push(rel);
+      }
+    }
+  };
+  walk(root);
+  return files.sort();
+}
+
+function computeSourceHash(projectRoot, changeName) {
+  const files = listEvidenceFiles(projectRoot, changeName);
+  const h = crypto.createHash('sha256');
+  for (const rel of files) {
+    h.update(rel);
+    h.update('\0');
+    h.update(fs.readFileSync(path.join(projectRoot, rel)));
+    h.update('\0');
+  }
+  return { hash: h.digest('hex'), fileCount: files.length };
+}
+
+function buildGateEvidence(projectRoot, changeName, phase, args, runtime = {}) {
+  const changeDir = path.join(projectRoot, 'spec_copilot', 'changes', changeName);
+  const specPath = path.join(changeDir, 'spec.md');
+  const tasksPath = path.join(changeDir, 'tasks.md');
+  const logPath = path.join(changeDir, 'log.md');
+  const source = computeSourceHash(projectRoot, changeName);
+  return {
+    schemaVersion: 1,
+    generatedBy: 'spec-copilot-cli',
+    runId: `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`,
+    phase,
+    changeName,
+    version: readVersion(),
+    timestamp: Date.now(),
+    command: ['spec-copilot', 'gate', changeName, phase, ...args.slice(2)].join(' '),
+    cwd: projectRoot,
+    environment: {
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    },
+    inputs: {
+      specHash: hashFileSafe(specPath),
+      tasksHash: hashFileSafe(tasksPath),
+      logHash: hashFileSafe(logPath),
+      sourceHash: source.hash,
+      sourceFileCount: source.fileCount,
+    },
+    runtime,
+  };
+}
+
+function buildGateSentinel(projectRoot, changeName, phase, args, runtime = {}) {
+  const evidence = buildGateEvidence(projectRoot, changeName, phase, args, runtime);
+  return {
+    generatedBy: 'spec-copilot-cli',
+    phase,
+    changeName,
+    timestamp: evidence.timestamp,
+    version: evidence.version,
+    evidence,
+  };
+}
+
+function validateGateEvidence(projectRoot, changeName, phase, sentinelPath) {
+  const data = readJsonSafe(sentinelPath);
+  if (!data || data.generatedBy !== 'spec-copilot-cli' || !data.evidence) {
+    return { pass: false, reason: `${path.basename(sentinelPath)} 缺少 CLI 签发证据，可能是手写哨兵` };
+  }
+  if (data.phase && data.phase !== phase) {
+    return { pass: false, reason: `${path.basename(sentinelPath)} phase=${data.phase}，期望 ${phase}` };
+  }
+  const evidence = data.evidence;
+  if (evidence.phase !== phase || evidence.changeName !== changeName) {
+    return { pass: false, reason: `${path.basename(sentinelPath)} 证据与当前 change/phase 不匹配` };
+  }
+  const current = buildGateEvidence(projectRoot, changeName, phase, ['gate', changeName, phase]);
+  const expected = evidence.inputs || {};
+  const actual = current.inputs || {};
+  const mismatches = [];
+  for (const key of ['specHash', 'tasksHash', 'logHash', 'sourceHash']) {
+    if ((expected[key] || null) !== (actual[key] || null)) mismatches.push(key);
+  }
+  if (mismatches.length > 0) {
+    return {
+      pass: false,
+      reason: `${path.basename(sentinelPath)} 已失效：${mismatches.join(', ')} 与当前工作区不一致，必须重跑 gate`,
+    };
+  }
+  return { pass: true, data };
 }
 
 function hasExplicitIncompleteDeclaration(text) {
@@ -594,6 +736,17 @@ async function cmdGate(args) {
   const skipReasons = []; // v4.0.10: 收集"该检查无输入"的跳过信号
   const scoreSignals = []; // v4.0.11: 结构化评分信号 — {code, status: pass|fail|skip, message}
                             // 评分层优先按 code 匹配，规避对文案正则的依赖
+  const runtimeEvidence = {
+    trustLevel: 'trusted',
+    degraded: false,
+    degradationReasons: [],
+    e2e: { attempted: false, skipped: false, available: null, pass: null },
+  };
+  const markDegraded = (reason) => {
+    runtimeEvidence.trustLevel = 'degraded';
+    runtimeEvidence.degraded = true;
+    runtimeEvidence.degradationReasons.push(reason);
+  };
   const fail = (msg, code) => {
     log.err(msg); pass = false; failReasons.push(msg);
     if (code) scoreSignals.push({ code, status: 'fail', message: msg });
@@ -786,24 +939,43 @@ async function cmdGate(args) {
           const beUrlIdx = args.indexOf('--backend-url');
           if (beUrlIdx !== -1 && args[beUrlIdx + 1]) e2eOpts.backendUrl = args[beUrlIdx + 1];
 
+          runtimeEvidence.e2e.attempted = true;
           log.info('执行 E2E 浏览器冒烟...');
           const e2eResult = await runE2ESmoke(projectRoot, specContent, e2eOpts);
+          runtimeEvidence.e2e.available = !!e2eResult.available;
+          runtimeEvidence.e2e.pass = !!e2eResult.pass;
 
           if (!e2eResult.available) {
-            log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
-            skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
-            skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
-            skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            runtimeEvidence.e2e.skipped = true;
+            markDegraded(`E2E 不可用：${e2eResult.skipReason}`);
+            if (isComplex) {
+              fail(`🔴 复杂需求 E2E 不可用，不能通过 smoke：${e2eResult.skipReason}`, 'E2E_PAGE');
+              fail(`API 连通未验证：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+              fail(`交互测试未验证：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            } else {
+              log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+              skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
+              skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+              skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            }
             if (e2eResult.installHint) log.info(`  ${e2eResult.installHint}`);
           } else if (e2eResult.startupError) {
             fail(`E2E 服务器启动失败：${e2eResult.startupError}`, 'E2E_PAGE');
             skip(`API 连通：E2E 服务器启动失败，未完成验证`, 'API_CONNECTIVITY');
             skip(`交互测试：E2E 服务器启动失败，未完成验证`, 'INTERACTION_TEST');
           } else if (e2eResult.skipReason) {
-            log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
-            skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
-            skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
-            skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            runtimeEvidence.e2e.skipped = true;
+            markDegraded(`E2E 跳过：${e2eResult.skipReason}`);
+            if (isComplex) {
+              fail(`🔴 复杂需求 E2E 被跳过，不能通过 smoke：${e2eResult.skipReason}`, 'E2E_PAGE');
+              fail(`API 连通未验证：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+              fail(`交互测试未验证：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            } else {
+              log.warn(`E2E 浏览器冒烟跳过：${e2eResult.skipReason}`);
+              skip(`E2E 页面：${e2eResult.skipReason}`, 'E2E_PAGE');
+              skip(`API 连通：${e2eResult.skipReason}`, 'API_CONNECTIVITY');
+              skip(`交互测试：${e2eResult.skipReason}`, 'INTERACTION_TEST');
+            }
           } else if (e2eResult.pass) {
             const s = e2eResult.summary;
             passOk(`E2E 浏览器冒烟通过（${s.passedPages}/${s.totalPages} 页面${s.totalApis > 0 ? ` / ${s.passedApis}/${s.totalApis} API` : ''}）`, 'E2E_PAGE');
@@ -941,16 +1113,33 @@ async function cmdGate(args) {
             }
           }
         } catch (e) {
-          log.warn(`E2E 浏览器冒烟跳过：${e.message.split('\n')[0]}`);
-          skip(`E2E 页面：${e.message.split('\n')[0]}`, 'E2E_PAGE');
-          skip(`API 连通：${e.message.split('\n')[0]}`, 'API_CONNECTIVITY');
-          skip(`交互测试：${e.message.split('\n')[0]}`, 'INTERACTION_TEST');
+          const reason = e.message.split('\n')[0];
+          runtimeEvidence.e2e.skipped = true;
+          markDegraded(`E2E 异常：${reason}`);
+          if (isComplex) {
+            fail(`🔴 复杂需求 E2E 执行异常，不能通过 smoke：${reason}`, 'E2E_PAGE');
+            fail(`API 连通未验证：${reason}`, 'API_CONNECTIVITY');
+            fail(`交互测试未验证：${reason}`, 'INTERACTION_TEST');
+          } else {
+            log.warn(`E2E 浏览器冒烟跳过：${reason}`);
+            skip(`E2E 页面：${reason}`, 'E2E_PAGE');
+            skip(`API 连通：${reason}`, 'API_CONNECTIVITY');
+            skip(`交互测试：${reason}`, 'INTERACTION_TEST');
+          }
         }
       } else {
-        log.info('E2E 浏览器冒烟已通过 --no-e2e 跳过');
-        skip('E2E 页面：已通过 --no-e2e 跳过', 'E2E_PAGE');
-        skip('API 连通：已通过 --no-e2e 跳过', 'API_CONNECTIVITY');
-        skip('交互测试：已通过 --no-e2e 跳过', 'INTERACTION_TEST');
+        runtimeEvidence.e2e.skipped = true;
+        markDegraded('通过 --no-e2e 跳过 E2E');
+        if (isComplex) {
+          fail('🔴 复杂需求不允许通过 --no-e2e 跳过 E2E 后通过 smoke；请运行真实 E2E 或将本阶段标记为 blocked', 'E2E_PAGE');
+          fail('API 连通未验证：--no-e2e', 'API_CONNECTIVITY');
+          fail('交互测试未验证：--no-e2e', 'INTERACTION_TEST');
+        } else {
+          log.info('E2E 浏览器冒烟已通过 --no-e2e 跳过');
+          skip('E2E 页面：已通过 --no-e2e 跳过', 'E2E_PAGE');
+          skip('API 连通：已通过 --no-e2e 跳过', 'API_CONNECTIVITY');
+          skip('交互测试：已通过 --no-e2e 跳过', 'INTERACTION_TEST');
+        }
       }
 
       break;
@@ -959,15 +1148,16 @@ async function cmdGate(args) {
       // ─── smoke gate 哨兵检查（v2.2.0）───
       const smokeSentinel = path.join(changeDir, '.gate-smoke-passed');
       if (fs.existsSync(smokeSentinel)) {
-        try {
-          const smokeData = JSON.parse(fs.readFileSync(smokeSentinel, 'utf-8'));
+        const smokeValidation = validateGateEvidence(projectRoot, changeName, 'smoke', smokeSentinel);
+        if (!smokeValidation.pass) {
+          fail(`smoke gate 哨兵无效：${smokeValidation.reason}`, 'SMOKE_SENTINEL');
+        } else {
+          const smokeData = smokeValidation.data;
           const ageMin = Math.round((Date.now() - smokeData.timestamp) / 60000);
-          passOk(`smoke gate 哨兵有效（${ageMin} 分钟前通过）`, 'SMOKE_SENTINEL');
-        } catch {
-          passOk('smoke gate 哨兵有效', 'SMOKE_SENTINEL');
+          passOk(`smoke gate 哨兵有效（${ageMin} 分钟前通过 / framework v${smokeData.version || 'unknown'}）`, 'SMOKE_SENTINEL');
         }
       } else {
-        log.warn('未检测到 smoke gate 哨兵（.gate-smoke-passed）— 建议先运行 `gate <name> smoke`');
+        fail('未检测到 smoke gate 哨兵（.gate-smoke-passed）— 必须先运行 `gate <name> smoke` 且通过', 'SMOKE_SENTINEL');
       }
 
       if (!fs.existsSync(logPath)) {
@@ -1824,12 +2014,13 @@ async function cmdGate(args) {
         if (!fs.existsSync(testSentinel)) {
           fail('🔴 复杂需求缺少 .gate-test-passed 哨兵 — review 后必须执行 /spec:test，不能直接 archive');
         } else {
-          const sentinelData = readJsonSafe(testSentinel);
-          if (sentinelData?.timestamp) {
+          const testValidation = validateGateEvidence(projectRoot, changeName, 'test', testSentinel);
+          if (!testValidation.pass) {
+            fail(`test gate 哨兵无效：${testValidation.reason}`);
+          } else {
+            const sentinelData = testValidation.data;
             const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
             log.ok(`test gate 哨兵有效（${ageMin} 分钟前 / framework v${sentinelData.version || 'unknown'}）`);
-          } else {
-            log.ok('test gate 哨兵有效');
           }
         }
       }
@@ -1858,6 +2049,11 @@ async function cmdGate(args) {
       if (!fs.existsSync(reviewSentinel)) {
         fail('缺少 .gate-review-passed 哨兵 — 模型不能仅靠在 spec.md §12 写"通过"就 archive，必须实际跑过 `gate <name> review` 且通过');
       } else {
+        const reviewValidation = validateGateEvidence(projectRoot, changeName, 'review', reviewSentinel);
+        if (!reviewValidation.pass) {
+          fail(`review gate 哨兵无效：${reviewValidation.reason}`);
+          break;
+        }
         // 3. 哨兵的 mtime 必须不早于 spec/tasks/log 的最后修改时间（任何后续编辑都会失效）
         const sentinelTime = fs.statSync(reviewSentinel).mtimeMs;
         const stale = [];
@@ -1872,14 +2068,9 @@ async function cmdGate(args) {
         if (stale.length > 0) {
           fail(`review 通过后下列文件被修改：${stale.join('，')} — 必须重新运行 \`gate <name> review\``);
         } else {
-          // 读取哨兵记录的 review 时间和版本
-          try {
-            const sentinelData = JSON.parse(fs.readFileSync(reviewSentinel, 'utf-8'));
-            const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
-            log.ok(`review gate 哨兵有效（${ageMin} 分钟前通过 / framework v${sentinelData.version}）`);
-          } catch {
-            log.ok('review gate 哨兵有效');
-          }
+          const sentinelData = reviewValidation.data;
+          const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
+          log.ok(`review gate 哨兵有效（${ageMin} 分钟前通过 / framework v${sentinelData.version || 'unknown'}）`);
         }
       }
       break;
@@ -2026,6 +2217,12 @@ async function cmdGate(args) {
 
       // 写入哨兵供后续阶段引用
       try {
+        const scoreEvidence = buildGateEvidence(projectRoot, changeName, phase, args, {
+          ...runtimeEvidence,
+          pass,
+          skippedCount,
+          scoreSignals,
+        });
         const scorePath = path.join(changeDir, `.gate-${phase}-score.json`);
         const scoreBreakdown = scoreItems.map(s => {
           const status = resolveStatus(s);
@@ -2037,7 +2234,16 @@ async function cmdGate(args) {
           };
         });
         fs.writeFileSync(scorePath, JSON.stringify({
-          phase, objectiveScore, selfScore, timestamp: Date.now(),
+          generatedBy: 'spec-copilot-cli',
+          phase,
+          objectiveScore,
+          selfScore,
+          timestamp: scoreEvidence.timestamp,
+          version: readVersion(),
+          trustLevel: runtimeEvidence.trustLevel,
+          degraded: runtimeEvidence.degraded,
+          degradationReasons: runtimeEvidence.degradationReasons,
+          evidence: scoreEvidence,
           breakdown: scoreBreakdown,
         }, null, 2) + '\n');
       } catch { /* 写入失败不影响 */ }
@@ -2057,10 +2263,12 @@ async function cmdGate(args) {
             ? '.gate-review-passed'
             : '.gate-test-passed';
         const sentinelPath = path.join(changeDir, sentinelName);
-        fs.writeFileSync(sentinelPath, JSON.stringify({
-          timestamp: Date.now(),
-          version: readVersion(),
-        }, null, 2) + '\n');
+        const sentinel = buildGateSentinel(projectRoot, changeName, phase, args, {
+          ...runtimeEvidence,
+          pass: true,
+          scoreSignals,
+        });
+        fs.writeFileSync(sentinelPath, JSON.stringify(sentinel, null, 2) + '\n');
       } catch (e) {
         log.warn(`写入 ${phase} 哨兵失败：${e.message}`);
       }

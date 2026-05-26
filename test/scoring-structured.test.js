@@ -14,6 +14,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 const { execSync } = require('node:child_process');
 
 const CLI = path.resolve(__dirname, '..', 'bin', 'cli.js');
@@ -64,9 +65,98 @@ test
 `);
   fs.writeFileSync(path.join(changeDir, 'log.md'), logMd);
   if (withSmokeSentinel) {
-    // 假装跑过 smoke
-    fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), '{}');
+    writeGateSentinel(dir, 'minimal', 'smoke');
   }
+}
+
+function writeGateSentinel(projectRoot, changeName, phase) {
+  const changeDir = path.join(projectRoot, 'spec_copilot', 'changes', changeName);
+  const now = Date.now();
+  const source = computeSourceHash(projectRoot, changeName);
+  const sentinel = {
+    generatedBy: 'spec-copilot-cli',
+    phase,
+    changeName,
+    timestamp: now,
+    version: 'test',
+    evidence: {
+      schemaVersion: 1,
+      generatedBy: 'spec-copilot-cli',
+      runId: `test-${phase}`,
+      phase,
+      changeName,
+      version: 'test',
+      timestamp: now,
+      command: `spec-copilot gate ${changeName} ${phase}`,
+      cwd: projectRoot,
+      environment: { node: process.version, platform: process.platform, arch: process.arch },
+      inputs: {
+        specHash: hashFile(path.join(changeDir, 'spec.md')),
+        tasksHash: hashFile(path.join(changeDir, 'tasks.md')),
+        logHash: hashFile(path.join(changeDir, 'log.md')),
+        sourceHash: source.hash,
+        sourceFileCount: source.fileCount,
+      },
+      runtime: { pass: true },
+    },
+  };
+  fs.writeFileSync(path.join(changeDir, `.gate-${phase}-passed`), JSON.stringify(sentinel, null, 2));
+}
+
+function hashFile(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function shouldSkipEvidenceFile(relPath, changeName) {
+  const rel = relPath.replace(/\\/g, '/');
+  const first = rel.split('/')[0];
+  if (
+    rel === '.git' ||
+    rel.startsWith('.git/') ||
+    rel.includes('/.git/') ||
+    first === 'node_modules' ||
+    rel.includes('/node_modules/') ||
+    first === 'dist' ||
+    rel.includes('/dist/') ||
+    first === 'target' ||
+    rel.includes('/target/') ||
+    first === 'build' ||
+    rel.includes('/build/') ||
+    first === 'coverage' ||
+    rel.includes('/coverage/') ||
+    first === '.next' ||
+    rel.includes('/.next/') ||
+    first === '.nuxt' ||
+    rel.includes('/.nuxt/') ||
+    rel.startsWith('.spec-copilot/screenshots/') ||
+    rel.includes('/.spec-copilot/screenshots/')
+  ) return true;
+  if (/\.DS_Store$/.test(rel)) return true;
+  if (rel.startsWith(`spec_copilot/changes/${changeName}/.gate-`)) return true;
+  return false;
+}
+
+function computeSourceHash(projectRoot, changeName) {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(projectRoot, full).replace(/\\/g, '/');
+      if (shouldSkipEvidenceFile(rel, changeName)) continue;
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(rel);
+    }
+  };
+  walk(projectRoot);
+  files.sort();
+  const h = crypto.createHash('sha256');
+  for (const rel of files) {
+    h.update(rel);
+    h.update('\0');
+    h.update(fs.readFileSync(path.join(projectRoot, rel)));
+    h.update('\0');
+  }
+  return { hash: h.digest('hex'), fileCount: files.length };
 }
 
 test('scoring: 极简 spec 的 review gate 输出含 ⊝ 跳过标记', () => {

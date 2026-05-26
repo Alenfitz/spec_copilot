@@ -4,6 +4,96 @@
 
 ---
 
+## [4.0.17] - 2026-05-26
+
+### 验证可信度加固
+
+本版本不声称能阻止所有模型跳过规范。它只解决一个更窄但可验证的问题：只要模型运行 gate，gate 结果必须可追溯、不可手写伪造，并且后续文件变更会让旧证据失效。
+
+#### gate 通过记录绑定证据
+
+- `.gate-smoke-passed` / `.gate-review-passed` / `.gate-test-passed` 现在写入 CLI 签发信息
+- 记录包含 runId、命令、Node/平台信息、框架版本、时间戳
+- 记录绑定 `spec.md`、`tasks.md`、`log.md` 和源码快照 hash
+- `.gate-*-score.json` 同步写入 `trustLevel`、降级原因与 evidence
+
+效果：手写 `{}` 哨兵不再能骗过 review/archive。
+
+#### review/archive 校验证据仍有效
+
+- `gate review` 会校验 smoke 哨兵必须由 CLI 签发且仍匹配当前文件
+- `gate archive` 会校验 review 哨兵，🔴 复杂需求还会校验 test 哨兵
+- gate 通过后再修改 spec/tasks/log/source，会提示证据失效，要求重跑对应 gate
+
+效果：避免"先跑一次 gate，再改文档/代码，仍然沿用旧通过记录"。
+
+#### 🔴 复杂需求不允许跳过 E2E 后通过 smoke
+
+- `--no-e2e` 在轻量/中等需求中仍可作为降级证据
+- 🔴 复杂需求使用 `--no-e2e`、E2E 不可用或 E2E 执行异常时，smoke 直接失败
+
+效果：复杂需求不能把"未验证"归一化成高分通过。
+
+#### Playwright smoke 构建可靠性
+
+- `bin/e2e-smoke.js` 不再参与发布构建混淆，直接复制到 dist
+- CLI 其它模块仍按原构建策略处理
+
+效果：降低混淆破坏 Playwright 运行时、造成验证工具假失败的风险。
+
+---
+
+## [4.0.16] - 2026-05-26
+
+### 阶段锁加固
+
+本版本不声称"解决所有模型不守规范问题"，只针对一次真实复盘中暴露出的核心缺陷做加固：
+
+- 模型读懂了 `/spec:init`
+- 也读懂了 "No Spec, No Code"
+- 但在用户催促"直接开发/一次做完"时，仍然自行越权跳过中间阶段
+
+本次改动的目标，是把这一类问题从"依赖模型自觉"推进到"文档合约更明确、更难误解"。
+
+#### 主提示词新增“阶段锁（高优先级）”
+
+`AGENTS.md.template` 新增独立章节，明确：
+
+- `/spec:init` 是唯一合法起点
+- 空壳项目在 `/spec:bootstrap` 完成前禁止进入需求开发
+- 🔴 重量需求未生成 `spec.md + tasks.md + log.md` 前禁止编码
+- 🟢 轻量需求未写完 5 节迷你 spec 且未得到用户二次确认前禁止编码
+- 用户消息中即使同时出现"直接开发/一次做完/先出代码"等催促，也不得跨阶段执行
+
+效果：降低模型把"快点完成"误判为可以覆盖阶段门禁的空间。
+
+#### init / bootstrap / propose / lite / apply 全链路补“禁止越级”文案
+
+为 5 个关键命令补充阶段锁：
+
+- `init.md`：声明自己是唯一合法起点；空壳项目时只允许转入 `/spec:bootstrap`
+- `bootstrap.md`：完成前禁止进入 `propose/lite/apply` 或直接写业务代码
+- `propose.md`：职责仅为产出 spec/tasks/log，不得因为用户催促直接编码
+- `lite.md`：同一条消息里的"直接做完"不能视为 Step 2 的确认，必须在迷你 spec 后拿到一次新的明确确认
+- `apply.md`：禁止绕过 `/spec:propose` 自行脑补 spec 后直接编码
+
+效果：把"不要跳步"从主提示词原则，收紧为各命令入口各自重复声明的行为合约。
+
+### 测试
+
+新增：
+
+- `test/stage-locks.test.js`
+
+守护内容包括：
+
+- AGENTS.md.template 必须存在“阶段锁（高优先级）”章节
+- init/bootstrap/propose/lite/apply 必须声明各自的禁止越级语义
+- lite 必须要求迷你 spec 之后的二次明确确认
+- apply 必须禁止绕过 propose 直接编码
+
+---
+
 ## [4.0.15] - 2026-05-26
 
 ### 复杂需求归档门禁收紧
