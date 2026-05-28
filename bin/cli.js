@@ -1704,6 +1704,19 @@ async function cmdGate(args) {
             }
           }
 
+          if (check.name === '写接口持久化闭环') {
+            if (check.message) {
+              skip(`${check.name}：${check.message}`, 'WRITE_PERSISTENCE');
+            } else if (check.pass) {
+              passOk(`写接口持久化闭环：${check.matched}/${check.total} 个写接口发现持久化证据`, 'WRITE_PERSISTENCE');
+            } else {
+              const msgs = check.risks.slice(0, 10).map(item =>
+                `${item.id || item.method} ${item.method} ${item.path} (${item.backendEntry || item.file}): ${item.reason}`
+              );
+              fail(`写接口持久化闭环失败（${check.matched}/${check.total} 有落库证据，${check.skipped || 0} 个未解析后端入口）：\n   ${msgs.join('\n   ')}`, 'WRITE_PERSISTENCE');
+            }
+          }
+
           if (check.name === '错误处理审计') {
             if (check.totalApiCalls === 0) {
               skip('错误处理审计：未检测到前端 API 调用', 'ERROR_HANDLING');

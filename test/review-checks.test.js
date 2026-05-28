@@ -27,6 +27,7 @@ test('review-checks: 模块导出所有期望函数', () => {
   assert.strictEqual(typeof reviewChecks.checkHardcodedIdentities, 'function');
   assert.strictEqual(typeof reviewChecks.checkRouteCompleteness, 'function');
   assert.strictEqual(typeof reviewChecks.checkRuleCoverage, 'function');
+  assert.strictEqual(typeof reviewChecks.checkWritePersistenceClosure, 'function');
 });
 
 test('checkApiContract: 空 spec → 不报错，返回 pass', () => {
@@ -172,6 +173,284 @@ class UserController {
     assert.strictEqual(result.results[0].feExact, true);
     assert.strictEqual(result.results[0].beExact, true);
     assert.strictEqual(result.results[0].path, '/api/users');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: 写接口只有返回成功但无落库证据时失败', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return Map.of("success", true);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, false);
+    assert.strictEqual(result.total, 1);
+    assert.strictEqual(result.risks.length, 1);
+    assert.match(result.risks[0].reason, /持久化证据/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: controller 委托 service 落库时通过', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+
+  public TicketController(TicketService ticketService) {
+    this.ticketService = ticketService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    Object saved = ticketService.create(request);
+    return Map.of("success", true, "data", saved);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketService.java'), `
+import java.util.Map;
+
+class TicketService {
+  private final TicketRepository ticketRepository;
+
+  public TicketService(TicketRepository ticketRepository) {
+    this.ticketRepository = ticketRepository;
+  }
+
+  public Object create(Map<String, Object> request) {
+    return ticketRepository.save(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketRepository.java'), `
+interface TicketRepository {
+  Object save(Object entity);
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, true);
+    assert.strictEqual(result.total, 1);
+    assert.strictEqual(result.matched, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: controller 调用 service.save 但 service 未落库时仍失败', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+
+  public TicketController(TicketService ticketService) {
+    this.ticketService = ticketService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return ticketService.save(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketService.java'), `
+import java.util.Map;
+
+class TicketService {
+  public Object save(Map<String, Object> request) {
+    return Map.of("success", true);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, false);
+    assert.strictEqual(result.risks.length, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: 无关 repository 写操作不能冒充当前接口落库', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+
+  public TicketController(TicketService ticketService) {
+    this.ticketService = ticketService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return ticketService.create(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketService.java'), `
+import java.util.Map;
+
+class TicketService {
+  private final UserRepository userRepository;
+
+  public TicketService(UserRepository userRepository) {
+    this.userRepository = userRepository;
+  }
+
+  public Object create(Map<String, Object> request) {
+    userRepository.updateLastLoginTime();
+    return Map.of("success", true);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, false);
+    assert.strictEqual(result.risks.length, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: addresses 这类 es 复数能匹配 addressRepository', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'AddressController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/addresses")
+class AddressController {
+  private final AddressService addressService;
+
+  public AddressController(AddressService addressService) {
+    this.addressService = addressService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return addressService.create(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'AddressService.java'), `
+import java.util.Map;
+
+class AddressService {
+  private final AddressRepository addressRepository;
+
+  public AddressService(AddressRepository addressRepository) {
+    this.addressRepository = addressRepository;
+  }
+
+  public Object create(Map<String, Object> request) {
+    return addressRepository.save(request);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 地址保存
+
+## 6. 接口契约
+\`POST /api/addresses/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/addresses/save | \`src/api/address.ts#saveAddress\` | \`AddressController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, true);
+    assert.strictEqual(result.matched, 1);
   } finally {
     cleanup(dir);
   }

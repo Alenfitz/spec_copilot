@@ -102,8 +102,8 @@ console.log('Copying assets...');
 copyDir(path.join(root, 'framework'), path.join(dist, 'framework'));
 copyDir(path.join(root, 'commands'), path.join(dist, 'commands'));
 
-// Copy READMEs to dist root
-for (const f of ['README.md', 'README.zh-CN.md']) {
+// Copy package docs to dist root
+for (const f of ['README.md', 'README.zh-CN.md', 'CHANGELOG.md']) {
   const src = path.join(root, f);
   if (fs.existsSync(src)) fs.copyFileSync(src, path.join(dist, f));
 }

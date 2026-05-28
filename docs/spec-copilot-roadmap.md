@@ -65,8 +65,10 @@
 | `v4.0.20` | Self Assessment | Constraints + Structured Context | AI 自述低分/降级转 gate 输入 |
 | `v4.0.21` | Lifecycle Ledger | Structured Context | 用户决策、假设、风险贯穿后续阶段 |
 | `v4.0.22` | Task Vertical Slice | Entropy Control | V-Slice 闭环字段、功能点上限、不可降级项 |
+| `v4.0.23` | Non-Degradable Task Rules | Entropy Control | 不可降级项接入 review gate |
+| `v4.0.24` | Write Persistence Closure | Entropy Control + Feedback Loops | 写接口必须有落库证据 |
 
-截至 v4.0.22：Constraints 和 Feedback Loops 基础扎实，Structured Context 初步落地，**Tool Orchestration 和 Entropy Control 明显偏弱**。
+截至 v4.0.24：Constraints 和 Feedback Loops 基础扎实，Structured Context 初步落地，Entropy Control 已开始从 task 结构进入代码证据层，**Tool Orchestration 仍明显偏弱**。
 
 ---
 
@@ -87,14 +89,14 @@
 
 ### P1. Entropy Control 补强
 
-v4.0.22 已落地 V-Slice 基础结构，v4.0.23 开始把 `不可降级项` 接入 review gate。下一步继续深化。
+v4.0.22 已落地 V-Slice 基础结构，v4.0.23 把 `不可降级项` 接入 review gate，v4.0.24 新增写接口持久化证据检查。下一步继续深化。
 
 优先事项：
-- 契约闭环检查（API 入参→落库→回显 全链路）
+- 契约闭环检查（API 入参→落库→回显 全链路；v4.0.24 已先覆盖"写接口是否有落库证据"）
 - task 类型识别（纯后端 / 纯前端 / 全栈闭环）
 - 不可降级项与 review/test 联动
 
-**Exit criteria**: V-Slice gate 在 3 个真实项目中拦住至少 1 次 task 过大或闭环缺失；契约闭环检查能检测到"接口有了但没落库"的 case。
+**Exit criteria**: V-Slice gate 在 3 个真实项目中拦住至少 1 次 task 过大或闭环缺失；契约闭环检查能检测到"接口有了但没落库"的 case，并逐步覆盖"入参字段未使用 / 落库后未回显"。
 
 ### P2. Tool Orchestration 补强
 
@@ -111,10 +113,12 @@ v4.0.22 已落地 V-Slice 基础结构，v4.0.23 开始把 `不可降级项` 接
 优先事项：
 - watch 违规时序输出增强
 - 保存落库、字段路径错位、DTO/Map 滥用检查
-- Playwright / E2E 降级原因可读化
+- Playwright / E2E 降级原因可读化：区分未装浏览器、未识别技术栈、服务启动失败、登录态阻断、页面无可测交互
+- Playwright 从通用冒烟升级为 V-Slice 驱动验收：消费 task 的"用户动作→接口→状态变化→回显→验证路径"，减少随机点击和按钮文案启发式
+- 表单/保存场景补强：提交后不仅观察 `POST/PUT`，还要尽量关联后续列表/详情回显或契约闭环证据
 - 区分"环境限制"与"实现偷懒"
 
-**Exit criteria**: watch 能在模型绕过 gate 时 30 秒内报警；新增至少 2 项 smoke 检查覆盖"接口通了但数据没落库"场景。
+**Exit criteria**: watch 能在模型绕过 gate 时 30 秒内报警；新增至少 2 项 smoke 检查覆盖"接口通了但数据没落库"场景；Playwright 对至少 1 个 V-Slice task 能输出步骤级验收证据，而不只是页面级冒烟结果。
 
 ### P4. Structured Context 扩展
 

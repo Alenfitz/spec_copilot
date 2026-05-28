@@ -2,6 +2,50 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.24] - 2026-05-28
+
+### Write Persistence Closure（Entropy Control v3）
+
+本版本不声称已经证明"保存一定正确"。它先补一个真实实验里反复出现的缺口：AI 写出了 `POST/PUT/PATCH/DELETE` 接口，甚至返回了 success，但后端入口或直接调用链里没有明显落库动作。
+
+#### review gate 新增写接口持久化闭环检查
+
+- 读取接口覆盖矩阵中的写接口：`POST` / `PUT` / `PATCH` / `DELETE`
+- 解析后端实现入口，例如 `TicketController#save`
+- 检查 controller 方法体是否存在 `save` / `insert` / `update` / `delete` / `persist` 等持久化证据
+- 如果 controller 委托给直接注入的 `Service` / `Repository` / `Mapper` / `Dao`，继续检查被调用方法体
+- 未发现证据时，`gate review` 失败并输出 `写接口持久化闭环失败`
+
+效果：把"接口有了但没落库"从人工 review 后期发现，前移到 review gate 的代码级证据检查。
+
+#### 测试
+
+扩展：
+
+- `test/review-checks.test.js`
+
+覆盖：
+
+- 写接口只返回成功但没有任何落库证据时失败
+- controller 委托 service，service 内调用 repository.save 时通过
+- `userRepository.updateLastLoginTime()` 这类无关 repository 写操作不能冒充当前接口落库
+- `/api/addresses/save` 这类 `es` 复数路径能匹配 `addressRepository.save(...)`
+
+验证结果：
+
+- `node --test test/review-checks.test.js`：15 / 15 通过
+- `npm test`：106 / 106 通过
+- `npm run build`：通过
+
+#### 边界
+
+- 这是启发式证据检查，不是数据库事务证明
+- 目前只追踪 Java/Spring controller 到直接 service/repository 调用的一跳
+- 具体 repository/mapper 调用需要和当前 API 业务 token 有重合；`repository.save(...)` 这类通用变量名仍作为证据接受
+- 业务 token 复数归一化只覆盖常见 `s` / `es` / `ies` 情况，不是完整词干算法
+- 无法证明保存字段完整、事务提交成功、回显数据正确
+- 如果项目使用非典型 ORM、动态 SQL、事件异步落库，可能需要后续 adapter 或白名单补强
+
 ## [4.0.23] - 2026-05-28
 
 ### Non-Degradable Task Rules（Entropy Control v2）

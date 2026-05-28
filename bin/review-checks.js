@@ -62,6 +62,20 @@ function uniq(arr) {
   return [...new Set(arr.filter(Boolean))];
 }
 
+function extractBalancedBody(content, openBraceIndex) {
+  if (openBraceIndex < 0 || openBraceIndex >= content.length) return '';
+  let depth = 0;
+  for (let i = openBraceIndex; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return content.slice(openBraceIndex + 1, i);
+    }
+  }
+  return '';
+}
+
 // ─── Spec 解析 ──────────────────────────────────────────────
 
 function extractSpecApis(specContent) {
@@ -328,6 +342,7 @@ function extractBackendApiContracts(projectRoot) {
           path: `${basePath}${subPath}`.replace(/\/+/g, '/'),
           requiredFields: requireCalls.length > 0 ? requireCalls : params,
           rawParams: params,
+          body: extractBalancedBody(content, mappingRegex.lastIndex - 1),
         });
       }
     }
@@ -555,7 +570,210 @@ function checkContractConsistency(projectRoot) {
   };
 }
 
-// ─── Check 2: 错误处理审计 ──────────────────────────────────
+// ─── Check 2: 写接口持久化闭环 ────────────────────────────────
+
+function isWriteMethod(method) {
+  return /^(POST|PUT|PATCH|DELETE)$/i.test(method || '');
+}
+
+const BUSINESS_TOKEN_STOP_WORDS = new Set([
+  'api', 'controller', 'service', 'repository', 'mapper', 'repo', 'dao',
+  'save', 'create', 'add', 'new', 'update', 'edit', 'delete', 'remove',
+  'patch', 'post', 'put', 'get', 'list', 'detail', 'query', 'search',
+  'by', 'id', 'ids', 'dto', 'vo', 'bo', 'request', 'response',
+]);
+
+const GENERIC_PERSISTENCE_RECEIVERS = new Set([
+  'basemapper', 'mapper', 'repository', 'repo', 'dao',
+  'jdbctemplate', 'entitymanager', 'mongotemplate', 'redistemplate',
+]);
+
+function normalizeBusinessToken(token) {
+  const lower = (token || '').toLowerCase();
+  if (!lower || lower.length < 3) return '';
+  if (lower.endsWith('ies') && lower.length > 4) return `${lower.slice(0, -3)}y`;
+  if (/(?:[sxz]|ch|sh)es$/.test(lower) && lower.length > 4) return lower.slice(0, -2);
+  if (lower.endsWith('s') && !lower.endsWith('ss') && lower.length > 3) return lower.slice(0, -1);
+  return lower;
+}
+
+function splitBusinessTokens(value) {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9_$]+/)
+    .map(normalizeBusinessToken)
+    .filter(token => token && !BUSINESS_TOKEN_STOP_WORDS.has(token));
+}
+
+function buildPersistenceContext(row, backendCall) {
+  const [backendClass = '', backendMethod = ''] = String(row.backendEntry || '').replace(/[`]/g, '').split('#');
+  const fileClass = backendCall && backendCall.file ? path.basename(backendCall.file, path.extname(backendCall.file)) : '';
+  return {
+    tokens: uniq([
+      ...splitBusinessTokens(row.path),
+      ...splitBusinessTokens(row.featurePoint),
+      ...splitBusinessTokens(backendClass),
+      ...splitBusinessTokens(backendMethod),
+      ...splitBusinessTokens(fileClass),
+      ...splitBusinessTokens(backendCall && backendCall.fnName),
+    ]),
+  };
+}
+
+function hasTokenOverlap(value, context) {
+  const expected = new Set((context && context.tokens) || []);
+  if (expected.size === 0) return true;
+  return splitBusinessTokens(value).some(token => expected.has(token));
+}
+
+function isGenericPersistenceReceiver(receiver) {
+  return GENERIC_PERSISTENCE_RECEIVERS.has(String(receiver || '').toLowerCase());
+}
+
+function isExactGenericPersistenceMethod(methodName) {
+  return /^(save|saveAndFlush|insert|insertSelective|update|updateById|updateByPrimaryKey|delete|deleteById|remove|removeById|persist|merge)$/i.test(methodName || '');
+}
+
+function hasWriteAction(methodName) {
+  return /(save|insert|update|delete|persist|merge|remove)/i.test(methodName || '');
+}
+
+function hasSqlPersistenceEvidence(text, context) {
+  const sqlRegex = /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([A-Za-z0-9_.$]+)/gi;
+  let m;
+  while ((m = sqlRegex.exec(text || '')) !== null) {
+    if (hasTokenOverlap(m[1], context)) return true;
+  }
+  return false;
+}
+
+function hasPersistenceEvidence(text, context = {}) {
+  if (!text) return false;
+  if (hasSqlPersistenceEvidence(text, context)) return true;
+
+  const callRegex = /\b([A-Za-z0-9_$]*(?:baseMapper|mapper|repository|repo|dao|jdbcTemplate|entityManager|mongoTemplate|redisTemplate))\s*\.\s*([A-Za-z0-9_$]+)\s*\(/gi;
+  let m;
+  while ((m = callRegex.exec(text)) !== null) {
+    const receiver = m[1];
+    const methodName = m[2];
+    if (!hasWriteAction(methodName)) continue;
+
+    const matchesCurrentApi = hasTokenOverlap(`${receiver} ${methodName}`, context);
+    if (matchesCurrentApi) return true;
+
+    // Generic receiver names such as repository.save(...) are accepted,
+    // but concrete receivers like userRepository.updateById(...) must match the current API tokens.
+    if (isGenericPersistenceReceiver(receiver) && isExactGenericPersistenceMethod(methodName)) return true;
+  }
+
+  return false;
+}
+
+function extractInjectedServices(controllerContent) {
+  const services = [];
+  const fieldRegex = /(?:@Autowired\s*)?(?:private|protected|public)?\s*(?:final\s+)?([A-Z][A-Za-z0-9_$]*(?:Service|Repository|Mapper|Dao|DAO))\s+([a-zA-Z_$][A-Za-z0-9_$]*)\s*[;=]/g;
+  let m;
+  while ((m = fieldRegex.exec(controllerContent)) !== null) {
+    services.push({ type: m[1], name: m[2] });
+  }
+
+  const ctorRegex = /public\s+[A-Z][A-Za-z0-9_$]*\s*\(([^)]*)\)/g;
+  while ((m = ctorRegex.exec(controllerContent)) !== null) {
+    for (const part of m[1].split(',')) {
+      const mm = part.trim().match(/([A-Z][A-Za-z0-9_$]*(?:Service|Repository|Mapper|Dao|DAO))\s+([a-zA-Z_$][A-Za-z0-9_$]*)/);
+      if (mm) services.push({ type: mm[1], name: mm[2] });
+    }
+  }
+
+  return uniq(services.map(item => `${item.type}#${item.name}`)).map(key => {
+    const [type, name] = key.split('#');
+    return { type, name };
+  });
+}
+
+function findJavaClassFile(projectRoot, className) {
+  const beRoots = detectBackendRoots(projectRoot);
+  for (const root of beRoots) {
+    const candidates = findFiles(root, ['.java']).filter(file => path.basename(file) === `${className}.java`);
+    if (candidates[0]) return candidates[0];
+  }
+  return null;
+}
+
+function extractJavaMethodBody(content, methodName) {
+  if (!content || !methodName) return '';
+  const methodRegex = new RegExp(`(?:public|protected|private)\\s+[^{;=]+\\s+${methodName}\\s*\\([^)]*\\)\\s*\\{`, 'g');
+  const match = methodRegex.exec(content);
+  if (!match) return '';
+  return extractBalancedBody(content, methodRegex.lastIndex - 1);
+}
+
+function hasCalledServicePersistence(projectRoot, backendCall, context) {
+  const controllerPath = path.join(projectRoot, backendCall.file);
+  const controllerContent = readSafe(controllerPath);
+  const services = extractInjectedServices(controllerContent);
+
+  for (const service of services) {
+    const callRegex = new RegExp(`\\b${service.name}\\s*\\.\\s*([A-Za-z0-9_$]+)\\s*\\(`, 'g');
+    let m;
+    while ((m = callRegex.exec(backendCall.body || '')) !== null) {
+      const calledMethod = m[1];
+      const serviceFile = findJavaClassFile(projectRoot, service.type);
+      if (!serviceFile) continue;
+      const serviceContent = readSafe(serviceFile);
+      const serviceBody = extractJavaMethodBody(serviceContent, calledMethod);
+      if (hasPersistenceEvidence(serviceBody, {
+        tokens: uniq([...(context && context.tokens ? context.tokens : []), ...splitBusinessTokens(service.type)]),
+      })) return true;
+    }
+  }
+
+  return false;
+}
+
+function checkWritePersistenceClosure(projectRoot, specContent) {
+  const coverageRows = extractApiCoverageMatrix(specContent);
+  const writeRows = coverageRows.filter(row => isWriteMethod(row.method));
+  if (writeRows.length === 0) {
+    return { pass: true, checked: 0, message: 'spec 中无 POST/PUT/PATCH/DELETE 写接口矩阵行' };
+  }
+
+  const backendApis = extractBackendApiContracts(projectRoot);
+  const risks = [];
+  const checked = [];
+
+  for (const row of writeRows) {
+    const backendCall = resolveBackendCoverageCall(projectRoot, row, backendApis);
+    if (!backendCall) continue;
+    checked.push({ id: row.id, method: row.method, path: row.path, backendEntry: row.backendEntry });
+
+    const persistenceContext = buildPersistenceContext(row, backendCall);
+    const directEvidence = hasPersistenceEvidence(backendCall.body, persistenceContext);
+    const delegatedEvidence = directEvidence ? false : hasCalledServicePersistence(projectRoot, backendCall, persistenceContext);
+    if (!directEvidence && !delegatedEvidence) {
+      risks.push({
+        id: row.id,
+        method: row.method,
+        path: row.path,
+        backendEntry: row.backendEntry,
+        file: backendCall.file,
+        fnName: backendCall.fnName,
+        reason: '未在后端入口或其直接调用的 Service/Repository 中发现 save/insert/update/delete 等持久化证据',
+      });
+    }
+  }
+
+  return {
+    pass: risks.length === 0,
+    checked: checked.length,
+    total: writeRows.length,
+    matched: checked.length - risks.length,
+    risks,
+    skipped: writeRows.length - checked.length,
+  };
+}
+
+// ─── Check 3: 错误处理审计 ──────────────────────────────────
 
 /**
  * 检查前端 API 调用点是否有错误处理
@@ -1044,7 +1262,19 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '前后端契约一致性', pass: true, error: e.message });
   }
 
-  // 3. 错误处理审计
+  // 3. 写接口持久化闭环
+  try {
+    const persistenceClosure = checkWritePersistenceClosure(projectRoot, specContent);
+    checks.push({
+      name: '写接口持久化闭环',
+      ...persistenceClosure,
+    });
+    if (!persistenceClosure.pass) overallPass = false;
+  } catch (e) {
+    checks.push({ name: '写接口持久化闭环', pass: true, error: e.message });
+  }
+
+  // 4. 错误处理审计
   try {
     const errorHandling = checkErrorHandling(projectRoot);
     checks.push({
@@ -1061,7 +1291,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '错误处理审计', pass: true, error: e.message });
   }
 
-  // 4. 硬编码数据检测
+  // 5. 硬编码数据检测
   try {
     const hardcoded = checkHardcodedData(projectRoot);
     checks.push({
@@ -1073,7 +1303,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '硬编码数据检测', pass: true, error: e.message });
   }
 
-  // 5. 硬编码业务身份检测
+  // 6. 硬编码业务身份检测
   try {
     const identities = checkHardcodedIdentities(projectRoot);
     checks.push({
@@ -1085,7 +1315,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '硬编码业务身份检测', pass: true, error: e.message });
   }
 
-  // 6. 路由完整性
+  // 7. 路由完整性
   try {
     const routes = checkRouteCompleteness(projectRoot, specContent);
     checks.push({
@@ -1097,7 +1327,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '路由完整性', pass: true, error: e.message });
   }
 
-  // 7. 业务规则覆盖
+  // 8. 业务规则覆盖
   try {
     const rules = checkRuleCoverage(projectRoot, specContent);
     checks.push({
@@ -1116,6 +1346,7 @@ module.exports = {
   runReviewChecks,
   checkApiContract,
   checkContractConsistency,
+  checkWritePersistenceClosure,
   checkErrorHandling,
   checkHardcodedData,
   checkHardcodedIdentities,
