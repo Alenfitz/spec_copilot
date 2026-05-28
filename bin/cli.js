@@ -27,6 +27,7 @@ const {
   checkTaskInterleaving,
   checkTaskGranularity,
   checkFrontendEvidence,
+  checkTaskVerticalSlices,
 } = require('./frontend-checks');
 const {
   checkContractConsistency,
@@ -643,9 +644,26 @@ async function cmdGate(args) {
         log.ok('log.md 存在');
       }
 
+      const tasksContent = fs.existsSync(tasksPath) ? fs.readFileSync(tasksPath, 'utf-8') : null;
+
+      if (tasksContent) {
+        try {
+          const verticalSlices = checkTaskVerticalSlices(tasksContent);
+          if (verticalSlices.failures.length > 0) {
+            fail(`Task Vertical Slice 检测失败：\n   ${verticalSlices.failures.join('\n   ')}\n   处理方式：把 task 改成可独立验证的最小业务闭环。`, 'TASK_VERTICAL_SLICE');
+          } else if (verticalSlices.checked.length > 0) {
+            log.ok(`Task Vertical Slice：${verticalSlices.checked.length} 个 task 具备基本闭环字段`);
+          }
+          for (const warning of verticalSlices.warnings) {
+            log.warn(warning);
+          }
+        } catch (e) {
+          log.warn(`Task Vertical Slice 检测跳过：${e.message.split('\n')[0]}`);
+        }
+      }
+
       // ─── 前端治本检查 1：tasks.md 前后端交织 ───
-      if (fs.existsSync(tasksPath)) {
-        const tasksContent = fs.readFileSync(tasksPath, 'utf-8');
+      if (tasksContent) {
         const specMentionsFE = /前端|页面|组件|\.vue|Vue|React|UI 交互|界面/.test(specContent);
         if (specMentionsFE) {
           try {

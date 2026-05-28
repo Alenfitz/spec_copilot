@@ -100,6 +100,38 @@ check_tasks() {
     if [[ "${vc:-0}" -lt "${tc:-0}" ]]; then
       log_warn "$tasks 部分 Task 可能缺少'验证命令'（${vc}/${tc}）"
     fi
+
+    local vsliceCount nondgCount
+    vsliceCount=$(grep -c "^### V-Slice（必填）" "$tasks" 2>/dev/null); vsliceCount=${vsliceCount:-0}
+    nondgCount=$(grep -cE "^- \*\*不可降级项\*\*[：:]" "$tasks" 2>/dev/null); nondgCount=${nondgCount:-0}
+    if [[ "${vsliceCount:-0}" -lt "${tc:-0}" ]]; then
+      log_err "$tasks 部分 Task 缺少 V-Slice 区块（${vsliceCount}/${tc}）"
+    fi
+    if [[ "${nondgCount:-0}" -lt "${tc:-0}" ]]; then
+      log_err "$tasks 部分 Task 缺少“不可降级项”字段（${nondgCount}/${tc}）"
+    fi
+
+    while IFS= read -r taskNo; do
+      local block
+      block=$(awk "/^## Task ${taskNo}:|^## Task ${taskNo}[：:]/{flag=1} flag{print} /^## Task [0-9]+:|^## Task [0-9]+[：:]/{if(flag && NR!=1 && \$0 !~ /^## Task ${taskNo}(:|[：:])/) exit}" "$tasks")
+      [[ -z "$block" ]] && continue
+
+      for field in "用户动作" "接口契约" "状态/数据变化" "界面/输出结果" "验证路径"; do
+        if ! printf '%s\n' "$block" | grep -qE "^- \*\*${field}\*\*[：:]"; then
+          log_err "$tasks Task ${taskNo} 缺少 V-Slice 字段：${field}"
+        fi
+      done
+
+      local coverage
+      coverage=$(printf '%s\n' "$block" | grep -E "^- \*\*覆盖功能点\*\*[：:]" | head -1 || true)
+      if [[ -n "$coverage" ]]; then
+        local featureCount
+        featureCount=$(printf '%s\n' "$coverage" | grep -oE 'F[0-9]+' | sort -u | wc -l | tr -d ' ')
+        if [[ "${featureCount:-0}" -gt 3 ]]; then
+          log_err "$tasks Task ${taskNo} 覆盖功能点超过 3 个（当前 ${featureCount} 个）"
+        fi
+      fi
+    done < <(grep -oE '^## Task [0-9]+' "$tasks" | awk '{print $3}')
   fi
 
   if [[ -f "$spec" ]] && grep -qE "status: (review|done)" "$spec"; then

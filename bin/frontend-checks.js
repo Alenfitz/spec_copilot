@@ -224,14 +224,42 @@ function detectAnyAbuse(projectRoot, threshold = 5) {
   };
 }
 
+// ─── Task 解析工具函数 ──────────────────────────────────────
+
+function splitTaskBlocks(tasksContent) {
+  return tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+}
+
+function extractTaskMeta(block) {
+  const titleMatch = block.match(/^## (Task \d+)[：:]\s*(.*)$/m);
+  const taskName = titleMatch ? titleMatch[1] : 'Task ?';
+  const title = titleMatch ? titleMatch[2] : '';
+  return { taskName, title };
+}
+
+function extractFieldValue(block, label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = block.match(new RegExp(`- \\*\\*${escaped}\\*\\*[：:]\\s*([^\\n]*)`, 'i'));
+  return match ? (match[1] || '').trim() : '';
+}
+
+function isNoneLike(text) {
+  return /^(无|none|n\/a|na|不适用)$/i.test(String(text || '').trim());
+}
+
+function countFeatureRefs(text) {
+  const refs = String(text || '').match(/\bF\d+\b/g) || [];
+  return [...new Set(refs)].length;
+}
+
 // ─── 检查 4：tasks.md 前后端交织检测 ─────────────────────────
 
 function checkTaskInterleaving(tasksContent) {
-  const taskBlocks = tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+  const taskBlocks = splitTaskBlocks(tasksContent);
   if (taskBlocks.length < 4) return { pass: true, message: 'task 数量 < 4，跳过交织检查' };
 
   const taskTypes = taskBlocks.map(block => {
-    const title = (block.match(/^## Task \d+[：:]\s*(.*)$/m) || [])[1] || '';
+    const { title } = extractTaskMeta(block);
     const isFe = /前端|页面|组件|vue|react|UI|界面|列表页|编辑页|弹框|弹窗|面板/.test(title);
     const isBe = /后端|接口|API|service|controller|mapper|数据库|表结构/.test(title);
     if (isFe && !isBe) return 'fe';
@@ -281,13 +309,11 @@ function checkTaskInterleaving(tasksContent) {
 // ─── 检查 5：前端 task 粒度检测 ──────────────────────────────
 
 function checkTaskGranularity(tasksContent, maxVuePerTask = 4) {
-  const taskBlocks = tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+  const taskBlocks = splitTaskBlocks(tasksContent);
   const oversized = [];
 
   for (const block of taskBlocks) {
-    const titleMatch = block.match(/^## (Task \d+)[：:]\s*(.*)$/m);
-    const taskName = titleMatch ? titleMatch[1] : '?';
-    const title = titleMatch ? titleMatch[2] : '';
+    const { taskName, title } = extractTaskMeta(block);
 
     // 仅检查前端 task
     const isFe = /前端|页面|组件|vue|react|UI|界面|列表页|编辑页/.test(title);
@@ -313,13 +339,11 @@ function checkTaskGranularity(tasksContent, maxVuePerTask = 4) {
 // ─── 检查 6：前端 task 功能性自证检测 ─────────────────────────
 
 function checkFrontendEvidence(tasksContent) {
-  const taskBlocks = tasksContent.split(/(?=^## Task \d+)/m).filter(b => /^## Task \d+/.test(b));
+  const taskBlocks = splitTaskBlocks(tasksContent);
   const failures = [];
 
   for (const block of taskBlocks) {
-    const titleMatch = block.match(/^## (Task \d+)[：:]\s*(.*)$/m);
-    const taskName = titleMatch ? titleMatch[1] : '?';
-    const title = titleMatch ? titleMatch[2] : '';
+    const { taskName, title } = extractTaskMeta(block);
 
     const isFe = /前端|页面|组件|vue|react|UI|界面|列表页|编辑页|弹框/.test(title);
     if (!isFe) continue;
@@ -346,6 +370,51 @@ function checkFrontendEvidence(tasksContent) {
   return { failures };
 }
 
+// ─── 检查 7：Task Vertical Slice 闭环检测 ─────────────────────
+
+function checkTaskVerticalSlices(tasksContent) {
+  const taskBlocks = splitTaskBlocks(tasksContent);
+  const failures = [];
+  const warnings = [];
+  const checked = [];
+
+  for (const block of taskBlocks) {
+    const { taskName, title } = extractTaskMeta(block);
+    checked.push(taskName);
+
+    const coverage = extractFieldValue(block, '覆盖功能点');
+    const nonDegradable = extractFieldValue(block, '不可降级项');
+    const userAction = extractFieldValue(block, '用户动作');
+    const apiContract = extractFieldValue(block, '接口契约');
+    const stateData = extractFieldValue(block, '状态/数据变化');
+    const uiOutput = extractFieldValue(block, '界面/输出结果');
+    const verifyPath = extractFieldValue(block, '验证路径');
+
+    const missing = [];
+    if (!userAction) missing.push('用户动作');
+    if (!apiContract) missing.push('接口契约');
+    if (!stateData) missing.push('状态/数据变化');
+    if (!uiOutput) missing.push('界面/输出结果');
+    if (!verifyPath) missing.push('验证路径');
+    if (!nonDegradable) missing.push('不可降级项');
+
+    if (missing.length > 0) {
+      failures.push(`${taskName}: 缺少 V-Slice / 闭环字段：${missing.join('、')}`);
+    }
+
+    const featureCount = countFeatureRefs(coverage);
+    if (featureCount > 3) {
+      failures.push(`${taskName}: 覆盖 ${featureCount} 个功能点（上限 3 个）— task 过大，建议继续拆分`);
+    }
+
+    if (isNoneLike(nonDegradable)) {
+      warnings.push(`${taskName}: “不可降级项”为”无” — 建议至少写出 1 条硬验收点`);
+    }
+  }
+
+  return { checked, failures, warnings };
+}
+
 // ─── 导出 ────────────────────────────────────────────────────
 
 module.exports = {
@@ -355,4 +424,5 @@ module.exports = {
   checkTaskInterleaving,
   checkTaskGranularity,
   checkFrontendEvidence,
+  checkTaskVerticalSlices,
 };
