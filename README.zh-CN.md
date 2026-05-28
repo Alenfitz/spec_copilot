@@ -49,6 +49,10 @@ npx @alenfitz/spec-copilot doctor
 2. **逐 Task 停顿** — 完成一个 task 就停下来展示验证证据，等用户说"继续"。
 3. **不编造，要找证据** — 代码现状必须有出处（文件路径 + 类名/方法名）。
 
+## 路线图
+
+- Harness Engineering 路线图：[`docs/spec-copilot-roadmap.md`](docs/spec-copilot-roadmap.md)
+
 ## 命令速查
 
 | 命令 | 何时用 | 产出 |
