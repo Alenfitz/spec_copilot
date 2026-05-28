@@ -237,9 +237,11 @@ function extractTaskMeta(block) {
   return { taskName, title };
 }
 
-function extractFieldValue(block, label) {
+function extractFieldValue(block, label, options = {}) {
+  const { bold = true } = options;
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = block.match(new RegExp(`- \\*\\*${escaped}\\*\\*[：:]\\s*([^\\n]*)`, 'i'));
+  const labelPattern = bold ? `\\*\\*${escaped}\\*\\*` : escaped;
+  const match = block.match(new RegExp(`(?:^|\\n)-\\s*${labelPattern}[：:]\\s*([^\\n]*)`, 'i'));
   return match ? (match[1] || '').trim() : '';
 }
 
@@ -415,6 +417,31 @@ function checkTaskVerticalSlices(tasksContent) {
   return { checked, failures, warnings };
 }
 
+function extractTaskNonDegradableViolations(tasksContent) {
+  const taskBlocks = splitTaskBlocks(tasksContent);
+  const failures = [];
+
+  for (const block of taskBlocks) {
+    const { taskName } = extractTaskMeta(block);
+    const nonDegradable = extractFieldValue(block, '不可降级项');
+    if (!nonDegradable || isNoneLike(nonDegradable)) continue;
+
+    const degraded = extractFieldValue(block, '简化或降级处理', { bold: false });
+    const degradedAlt = extractFieldValue(block, '简化/降级处理', { bold: false });
+    const accepted = /用户确认接受降级[：:]\s*(?:是|已确认|true|yes|y|✅)/i.test(block);
+    const combinedDegradation = [degraded, degradedAlt].filter(Boolean).join(' / ');
+
+    if (!combinedDegradation || isNoneLike(combinedDegradation)) continue;
+
+    failures.push(
+      `${taskName}: 已声明“不可降级项” (${nonDegradable})，但仍记录了简化/降级处理（${combinedDegradation}）` +
+      `${accepted ? '，不可通过用户接受降级绕过' : ''}`
+    );
+  }
+
+  return { failures };
+}
+
 // ─── 导出 ────────────────────────────────────────────────────
 
 module.exports = {
@@ -425,4 +452,5 @@ module.exports = {
   checkTaskGranularity,
   checkFrontendEvidence,
   checkTaskVerticalSlices,
+  extractTaskNonDegradableViolations,
 };

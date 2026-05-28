@@ -2,6 +2,51 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.23] - 2026-05-28
+
+### Non-Degradable Task Rules（Entropy Control v2）
+
+本版本不声称已经自动验证“真实落库”或“真实回显”本身。它先解决一个更现实的问题：在 `v4.0.22` 里，task 已经可以声明 `不可降级项`，但如果后续又把同一项写进“简化或降级处理”，review gate 仍然只能笼统地报“有降级”，无法明确指出这是对硬验收点的绕过。
+
+#### review gate 新增不可降级项约束
+
+- 如果 task 已声明 `不可降级项`
+- 且同一 task 又存在非“无”的 `简化或降级处理`
+- 则 review gate 失败
+- 即使用户写了“接受降级”，也不能用来绕过 `不可降级项`
+
+效果：让 `不可降级项` 从模板字段升级为真正的 gate 输入。
+
+#### apply 命令文档同步
+
+- `/spec:apply` 现在明确声明：
+  - `不可降级项` 不是展示字段
+  - 不能把 `不可降级项` 对应缺口写成“简化或降级处理”继续推进
+  - 这类情况只能继续补齐，或回到 propose/amend 重写需求边界
+
+#### 测试
+
+扩展：
+
+- `test/entropy-control.test.js`
+
+覆盖：
+
+- 不可降级项被写入降级处理时，程序化检测失败
+- review gate 输出必须明确提示“不可降级项约束失败”
+
+验证结果：
+
+- `npm test`：101 / 101 通过
+- `node --test test/entropy-control.test.js`：8 / 8 通过
+- `npm run build`：通过
+
+#### 边界
+
+- 这版还不能自动证明“不可降级项”是否真的被实现
+- 它只先处理“AI 明知这里是硬验收点，却又自己写成降级”的场景
+- 更强的“真实落库 / 回显 / 请求发生”验证，仍要靠后续契约闭环检查和 smoke/E2E 补强
+
 ## [4.0.22] - 2026-05-28
 
 ### Task Vertical Slice（Entropy Control v1）

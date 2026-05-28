@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
 
-const { checkTaskVerticalSlices } = require('../bin/frontend-checks');
+const { checkTaskVerticalSlices, extractTaskNonDegradableViolations } = require('../bin/frontend-checks');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'spec-copilot-entropy-'));
@@ -70,6 +70,33 @@ function runGateApply(projectRoot) {
   }
 }
 
+function runGateReview(projectRoot) {
+  const cli = path.join(__dirname, '..', 'bin', 'cli.js');
+  try {
+    const stdout = execSync(`node "${cli}" gate demo review`, {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return { pass: true, stdout };
+  } catch (e) {
+    return {
+      pass: false,
+      stdout: e.stdout?.toString() || '',
+      stderr: e.stderr?.toString() || '',
+      status: e.status,
+    };
+  }
+}
+
+function addSmokePass(changeDir) {
+  fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), JSON.stringify({
+    timestamp: Date.now(),
+    version: '4.0.22',
+  }), 'utf-8');
+  fs.appendFileSync(path.join(changeDir, 'log.md'), '\nsmoke 已通过\n', 'utf-8');
+}
+
 test('checkTaskVerticalSlices: 缺少 V-Slice 字段时失败', () => {
   const tasks = `# Tasks
 
@@ -127,6 +154,36 @@ test('checkTaskVerticalSlices: 覆盖功能点超过 3 个时失败', () => {
 `;
   const result = checkTaskVerticalSlices(tasks);
   assert.ok(result.failures.some(f => f.includes('覆盖 4 个功能点')));
+});
+
+test('extractTaskNonDegradableViolations: 不可降级项被写入降级处理时失败', () => {
+  const tasks = `# Tasks
+
+## 前置条件
+- [ ] spec 已确认
+
+## Task 1: 保存闭环
+- **目标**：完成保存并回显
+- **覆盖功能点**：F01
+- **不可降级项**：保存必须真实落库
+- **涉及文件**：
+  - \`src/a.ts\`
+
+### V-Slice（必填）
+- **用户动作**：编辑后点击保存
+- **接口契约**：POST /api/tickets/save
+- **状态/数据变化**：保存工单并持久化
+- **界面/输出结果**：重新打开后看到最新内容
+- **验证路径**：编辑 -> 保存 -> 重新打开
+
+**3. 未实现声明**
+- 本 task 未完成的功能点：无
+- 已知缺陷或 TODO：无
+- 简化或降级处理：保存后只更新前端状态，暂未真实落库
+- 用户确认接受降级：是
+`;
+  const result = extractTaskNonDegradableViolations(tasks);
+  assert.ok(result.failures.some(f => f.includes('不可降级项')));
 });
 
 test('lint: 缺少 V-Slice / 不可降级项时失败', () => {
@@ -312,6 +369,81 @@ test('gate apply: 合法 V-Slice task 可以通过', () => {
     const result = runGateApply(dir);
     assert.strictEqual(result.pass, true, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Task Vertical Slice：1 个 task 具备基本闭环字段/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('gate review: 不可降级项不能通过降级处理绕过', () => {
+  const dir = mkTmp();
+  try {
+    setupProject(
+      dir,
+      `# Tasks
+
+## 前置条件
+- [ ] spec 已确认
+
+## Task 1: 保存闭环
+- **目标**：完成保存并回显
+- **覆盖功能点**：F01
+- **不可降级项**：保存必须真实落库
+- **涉及文件**：
+  - \`src/a.ts\`
+- **关键签名**：
+  \`\`\`ts
+  export function saveTicket() {}
+  \`\`\`
+
+### V-Slice（必填）
+- **用户动作**：编辑后点击保存
+- **接口契约**：POST /api/tickets/save
+- **状态/数据变化**：保存工单并持久化
+- **界面/输出结果**：重新打开后看到最新内容
+- **验证路径**：编辑 -> 保存 -> 重新打开
+
+- **验证命令**：
+  \`\`\`bash
+  curl http://localhost:8080/api/tickets/save
+  \`\`\`
+- **Git commit**：\`[demo] T1: save\`
+- 状态：✅
+
+**3. 未实现声明**
+- 本 task 未完成的功能点：无
+- 已知缺陷或 TODO：无
+- 简化或降级处理：保存后只更新前端状态，暂未真实落库
+- 用户确认接受降级：是
+
+**4. 自评**
+- 给用户拿这个代码，他能干什么/不能干什么：能点保存，但刷新后不会回显
+- 自评分（0-100）：100/100（用户已接受降级）
+`,
+      `> status: propose
+> complexity: 🔴
+
+## 1. 背景与目标
+
+## 2. 代码现状
+
+## 3. 功能点
+
+## 4. 业务规则
+
+## 9. 待澄清
+
+## 10. 技术决策
+
+## 13. 确认记录
+`
+    );
+    const changeDir = path.join(dir, 'spec_copilot', 'changes', 'demo');
+    addSmokePass(changeDir);
+    const result = runGateReview(dir);
+    const output = `${result.stdout}\n${result.stderr}`;
+    assert.strictEqual(result.pass, false);
+    assert.match(output, /不可降级项约束失败/);
+    assert.match(output, /已声明“不可降级项”/);
   } finally {
     cleanup(dir);
   }

@@ -28,6 +28,7 @@ const {
   checkTaskGranularity,
   checkFrontendEvidence,
   checkTaskVerticalSlices,
+  extractTaskNonDegradableViolations,
 } = require('./frontend-checks');
 const {
   checkContractConsistency,
@@ -1003,6 +1004,17 @@ async function cmdGate(args) {
         const pendingTasks = tasksContent.match(/状态[：:]\s*(待完成|未完成|进行中|todo|wip)/gi) || [];
         if (pendingTasks.length > 0) {
           fail(`tasks.md 中有 ${pendingTasks.length} 个未完成 task`);
+        }
+
+        try {
+          const nonDegradable = extractTaskNonDegradableViolations(tasksContent);
+          if (nonDegradable.failures.length > 0) {
+            fail(`不可降级项约束失败：\n   ${nonDegradable.failures.join('\n   ')}\n   ⚠️ 已声明的硬验收点不能再通过“简化或降级处理”绕过。`, 'NON_DEGRADABLE');
+          } else {
+            passOk('不可降级项约束：未检测到硬验收点被降级绕过', 'NON_DEGRADABLE');
+          }
+        } catch (e) {
+          log.warn(`不可降级项约束检测跳过：${e.message.split('\n')[0]}`);
         }
       }
 
