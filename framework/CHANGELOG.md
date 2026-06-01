@@ -14,11 +14,14 @@ v4.0.27 让 guard 默认上膛，但引入一个首跑回归：`install` 先创�
 - `onGatePassed` 在首个 gate（apply/smoke）通过后补锁 `always` 文件——此时内容已填充，锁的是真实内容而非空模板
 - `onGatePassed` 返回 `{ locked, failures }`；gate 调用点对"guard 已安装但自动锁定失败"发出明确 warning，不再静默吞掉（P2）
 - 新增首跑回归测试：install 不锁空模板 / 填充 project-context 后 gate 不误判
+- 自动锁定增加模板态判断：未填充的 `project-context.md` 和仍为示例的 `domain-rules.md` 不会在首个 gate 被误锁成可信事实
+- `apply` gate 后如果当前 `spec.md` 合同冻结失败，则本次 gate 失败；上下文/领域规则补锁失败仍以明确 warning 暴露
 
 #### 效果
 
 - 新装项目：`guard install` 后 `locks.json` 为空，`/spec:init` 正常填充上下文不被拦
 - 首个 apply/smoke gate 通过后，spec.md + domain-rules.md + project-context.md 才被锁定（保护不丢，只是延后到正确时机）
+- 如果 project-context/domain-rules 仍是模板态，会被提示并保持未锁定，直到填入真实内容
 
 ## [4.0.27] - 2026-06-01
 

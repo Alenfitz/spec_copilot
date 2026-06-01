@@ -2155,12 +2155,22 @@ async function cmdGate(args) {
       const guard = require('./guard');
       if (guard.isInstalled(projectRoot)) {
         const res = guard.onGatePassed(projectRoot, changeName, phase);
+        if (res && res.skipped && res.skipped.length > 0) {
+          for (const s of res.skipped) {
+            log.warn(`Guard 暂未锁定：${s.file} — ${s.reason}`);
+          }
+        }
         if (res && res.failures && res.failures.length > 0) {
           // P2：锁定失败不能静默 —— 否则用户以为 spec 已冻结，实际没锁，后续可被改写绕过
           for (const f of res.failures) {
             log.warn(`Guard 自动锁定失败：${f.file} — ${f.error}`);
           }
           log.warn('  上述文件未被冻结，后续改动不会被 gate 拦截；请人工运行 spec-copilot guard lock');
+          const specRelPath = `spec_copilot/changes/${changeName}/spec.md`;
+          if (phase === 'apply' && res.failures.some(f => f.file === specRelPath)) {
+            log.err('apply gate 后 spec.md 合同冻结失败 — 为避免假通过，本次 gate 判定失败');
+            process.exit(1);
+          }
         }
       }
     } catch (e) {

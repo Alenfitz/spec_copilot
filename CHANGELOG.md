@@ -16,11 +16,14 @@ Changes:
 - `onGatePassed` locks the `always` files at the first passing gate (apply/smoke), when content is already filled — locking real content instead of an empty template.
 - `onGatePassed` now returns `{ locked, failures }`; the gate call site emits an explicit warning when guard is installed but auto-lock fails, instead of swallowing it silently (P2).
 - Added first-run regression tests: install does not lock empty templates; filling project-context.md does not trip the gate.
+- Template-aware auto-lock follow-up: auto-lock skips unfilled `project-context.md` and example-only `domain-rules.md`, so the first gate cannot accidentally freeze placeholder context as trusted truth.
+- `apply` gate now fails if Guard cannot freeze the current `spec.md`; permanent context/rule auto-lock failures remain visible warnings.
 
 Effect:
 
 - New projects: after `guard install`, `locks.json` is empty, so `/spec:init` filling context is not blocked.
 - After the first apply/smoke gate passes, spec.md + domain-rules.md + project-context.md get locked (protection preserved, just deferred to the right moment).
+- If project context/domain rules are still templates, they are reported and left unlocked until real content exists.
 
 ## [4.0.27] - 2026-06-01
 

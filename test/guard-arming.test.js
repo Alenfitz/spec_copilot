@@ -87,7 +87,12 @@ test('首跑回归：/spec:init 填充 project-context.md 后跑 gate 不被当�
 
     // 模拟 /spec:init 正常填充项目上下文
     const ctx = path.join(dir, 'spec_copilot', 'rules', 'project-context.md');
-    fs.appendFileSync(ctx, '\n## 技术栈\n- 后端：Spring Boot\n- 前端：Vue3\n');
+    let ctxContent = fs.readFileSync(ctx, 'utf-8');
+    ctxContent = ctxContent
+      .replace('- 应用名：', '- 应用名：demo')
+      .replace('- 简介：', '- 简介：guard first-run regression fixture')
+      .replace('- 技术栈：', '- 技术栈：Spring Boot + Vue3');
+    fs.writeFileSync(ctx, ctxContent, 'utf-8');
 
     writeMinimalChange(dir, 'demo', 'apply');
     const { out } = runIn(dir, ['gate', 'demo', 'apply']);
@@ -95,6 +100,43 @@ test('首跑回归：/spec:init 填充 project-context.md 后跑 gate 不被当�
     // 关键：填充上下文是合法行为，绝不能被 guard 当成"被篡改"拦截
     assert.doesNotMatch(out, /guard 拦截/, '填充 project-context.md 不应触发 guard 拦截');
     assert.doesNotMatch(out, /完整性校验失败/, '填充 project-context.md 不应触发完整性校验失败');
+
+    const locks = JSON.parse(fs.readFileSync(path.join(dir, '.spec-copilot', 'locks.json'), 'utf-8'));
+    assert.ok(
+      locks.files['spec_copilot/rules/project-context.md'],
+      '首个 gate 后应锁定已填充的 project-context.md'
+    );
+    assert.ok(
+      !locks.files['spec_copilot/rules/domain-rules.md'],
+      'domain-rules.md 仍是示例模板时不应被自动锁定'
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('首跑回归：未填充上下文时首个 gate 不把空模板锁成可信事实', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, ['install', '--tool', 'claude-code']);
+    writeMinimalChange(dir, 'demo', 'apply');
+
+    const { out } = runIn(dir, ['gate', 'demo', 'apply']);
+    assert.match(out, /暂未锁定|仍是未填充模板/, '应提示模板态上下文暂不锁定');
+
+    const locks = JSON.parse(fs.readFileSync(path.join(dir, '.spec-copilot', 'locks.json'), 'utf-8'));
+    assert.ok(
+      locks.files['spec_copilot/changes/demo/spec.md'],
+      'apply gate 后仍应锁定当前 spec.md'
+    );
+    assert.ok(
+      !locks.files['spec_copilot/rules/project-context.md'],
+      '未填充 project-context.md 不应被自动锁定'
+    );
+    assert.ok(
+      !locks.files['spec_copilot/rules/domain-rules.md'],
+      '示例 domain-rules.md 不应被自动锁定'
+    );
   } finally {
     cleanup(dir);
   }

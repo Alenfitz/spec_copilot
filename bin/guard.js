@@ -231,6 +231,27 @@ function verifyIntegrity(projectRoot) {
   return { pass: violations.length === 0, violations };
 }
 
+function isTemplateProjectContext(content) {
+  return /^- 应用名：\s*$/m.test(content) &&
+    /^- 简介：\s*$/m.test(content) &&
+    /^- 技术栈：\s*$/m.test(content);
+}
+
+function isTemplateDomainRules(content) {
+  return /<!-- 示例 -->/.test(content) &&
+    /<!-- 示例结束 -->/.test(content);
+}
+
+function shouldSkipAutoLock(relPath, content) {
+  if (relPath === 'spec_copilot/rules/project-context.md' && isTemplateProjectContext(content)) {
+    return 'project-context.md 仍是未填充模板，先执行 /spec:init 后再锁定';
+  }
+  if (relPath === 'spec_copilot/rules/domain-rules.md' && isTemplateDomainRules(content)) {
+    return 'domain-rules.md 仍是示例模板，填写真正规则后再锁定';
+  }
+  return null;
+}
+
 /**
  * 检查骨架组件（在 gate 时调用）
  */
@@ -361,6 +382,12 @@ function cmdGuardInstall(projectRoot, opts = {}) {
       for (const f of files) {
         const locks = readLocks(projectRoot);
         if (!locks.files[f]) {
+          const content = fs.readFileSync(path.join(projectRoot, f), 'utf-8');
+          const skipReason = shouldSkipAutoLock(f, content);
+          if (skipReason) {
+            log.info(`跳过锁定 ${f} — ${skipReason}`);
+            continue;
+          }
           lockFile(projectRoot, f, rule.reason);
           locked++;
           log.ok(`🔒 ${f} — hash 已记录`);
@@ -475,6 +502,12 @@ function autoLockByPhase(projectRoot) {
     for (const f of files) {
       const locks = readLocks(projectRoot);
       if (!locks.files[f]) {
+        const content = fs.readFileSync(path.join(projectRoot, f), 'utf-8');
+        const skipReason = shouldSkipAutoLock(f, content);
+        if (skipReason) {
+          log.info(`跳过锁定 ${f} — ${skipReason}`);
+          continue;
+        }
         lockFile(projectRoot, f, rule.reason);
         count++;
         log.ok(`🔒 ${f}`);
@@ -572,13 +605,19 @@ function cmdGuardCheck(projectRoot, isHook) {
  * gate 通过后自动锁定 spec.md
  */
 function onGatePassed(projectRoot, changeName, phase) {
-  const result = { locked: [], failures: [] };
+  const result = { locked: [], skipped: [], failures: [] };
   if (phase !== 'smoke' && phase !== 'apply') return result;
 
-  const tryLock = (relPath, reason) => {
+  const tryLock = (relPath, reason, opts = {}) => {
     const full = path.join(projectRoot, relPath);
     if (!fs.existsSync(full)) return;
     try {
+      const content = fs.readFileSync(full, 'utf-8');
+      const skipReason = opts.skipTemplate ? shouldSkipAutoLock(relPath, content) : null;
+      if (skipReason) {
+        result.skipped.push({ file: relPath, reason: skipReason });
+        return;
+      }
       if (lockFile(projectRoot, relPath, reason)) result.locked.push(relPath);
     } catch (e) {
       result.failures.push({ file: relPath, error: e.message });
@@ -595,7 +634,7 @@ function onGatePassed(projectRoot, changeName, phase) {
   for (const rule of (config.protectedFiles || [])) {
     if (rule.lockAfter !== 'always') continue;
     for (const f of findMatchingFiles(projectRoot, rule.pattern)) {
-      if (!locks.files[f]) tryLock(f, rule.reason);
+      if (!locks.files[f]) tryLock(f, rule.reason, { skipTemplate: true });
     }
   }
 
