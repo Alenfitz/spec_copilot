@@ -2,6 +2,24 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.28] - 2026-06-01
+
+### Guard 首跑回归修复
+
+v4.0.27 让 guard 默认上膛，但引入一个首跑回归：`install` 先创建空的 `project-context.md` / `domain-rules.md` 模板，随即 `guard install` 按 `lockAfter: always` 把它们锁住（锁的是空模板 hash）。随后 `/spec:init` 正常填充上下文，下次 gate 的 hash 校验就会把这次合法填充当成"被篡改"拦截——这是首跑体验回归，不是安全增强。
+
+#### 变更
+
+- `cmdGuardInstall` 新增 `deferAlwaysLock` 选项；`install` 自动上膛时延后锁定永久保护文件
+- `onGatePassed` 在首个 gate（apply/smoke）通过后补锁 `always` 文件——此时内容已填充，锁的是真实内容而非空模板
+- `onGatePassed` 返回 `{ locked, failures }`；gate 调用点对"guard 已安装但自动锁定失败"发出明确 warning，不再静默吞掉（P2）
+- 新增首跑回归测试：install 不锁空模板 / 填充 project-context 后 gate 不误判
+
+#### 效果
+
+- 新装项目：`guard install` 后 `locks.json` 为空，`/spec:init` 正常填充上下文不被拦
+- 首个 apply/smoke gate 通过后，spec.md + domain-rules.md + project-context.md 才被锁定（保护不丢，只是延后到正确时机）
+
 ## [4.0.27] - 2026-06-01
 
 ### Guard 默认上膛（Tool Orchestration — 让已有机制生效）
