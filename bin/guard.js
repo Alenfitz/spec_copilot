@@ -325,7 +325,7 @@ const log = {
 /**
  * guard install
  */
-function cmdGuardInstall(projectRoot) {
+function cmdGuardInstall(projectRoot, opts = {}) {
   log.title('spec-copilot guard install');
 
   ensureGuardDir(projectRoot);
@@ -348,21 +348,29 @@ function cmdGuardInstall(projectRoot) {
   // 锁定 always 保护的文件
   const config = readConfig(projectRoot);
   let locked = 0;
-  for (const rule of (config.protectedFiles || [])) {
-    if (rule.lockAfter !== 'always') continue;
-    const files = findMatchingFiles(projectRoot, rule.pattern);
-    for (const f of files) {
-      const locks = readLocks(projectRoot);
-      if (!locks.files[f]) {
-        lockFile(projectRoot, f, rule.reason);
-        locked++;
-        log.ok(`🔒 ${f} — hash 已记录`);
+  if (opts.deferAlwaysLock) {
+    // 自动上膛（install 触发）场景：domain-rules / project-context 此刻还是空模板，
+    // 等着 /spec:init 或用户填充。现在锁等于锁空模板，首次合法填充会被误判为篡改。
+    // 因此延后到首个 gate（apply/smoke）通过后、内容已填充时再补锁（见 onGatePassed）。
+    log.info('永久保护文件（domain-rules / project-context）延后到首个 gate 通过后锁定');
+    log.info('  原因：避免锁定尚未填充的空模板，导致 /spec:init 正常填充被当成篡改');
+  } else {
+    for (const rule of (config.protectedFiles || [])) {
+      if (rule.lockAfter !== 'always') continue;
+      const files = findMatchingFiles(projectRoot, rule.pattern);
+      for (const f of files) {
+        const locks = readLocks(projectRoot);
+        if (!locks.files[f]) {
+          lockFile(projectRoot, f, rule.reason);
+          locked++;
+          log.ok(`🔒 ${f} — hash 已记录`);
+        }
       }
     }
-  }
 
-  if (locked === 0) {
-    log.info('无永久保护文件需要锁定（或文件尚不存在）');
+    if (locked === 0) {
+      log.info('无永久保护文件需要锁定（或文件尚不存在）');
+    }
   }
 
   // 安装 git hook（可选）
@@ -564,13 +572,34 @@ function cmdGuardCheck(projectRoot, isHook) {
  * gate 通过后自动锁定 spec.md
  */
 function onGatePassed(projectRoot, changeName, phase) {
-  if (phase !== 'smoke' && phase !== 'apply') return;
+  const result = { locked: [], failures: [] };
+  if (phase !== 'smoke' && phase !== 'apply') return result;
 
-  const specRelPath = `spec_copilot/changes/${changeName}/spec.md`;
-  const specFullPath = path.join(projectRoot, specRelPath);
-  if (!fs.existsSync(specFullPath)) return;
+  const tryLock = (relPath, reason) => {
+    const full = path.join(projectRoot, relPath);
+    if (!fs.existsSync(full)) return;
+    try {
+      if (lockFile(projectRoot, relPath, reason)) result.locked.push(relPath);
+    } catch (e) {
+      result.failures.push({ file: relPath, error: e.message });
+    }
+  };
 
-  lockFile(projectRoot, specRelPath, `${phase} gate 通过后自动锁定`);
+  // spec.md：apply/smoke 通过后锁定（Contract Freeze）
+  tryLock(`spec_copilot/changes/${changeName}/spec.md`, `${phase} gate 通过后自动锁定`);
+
+  // always 保护文件（domain-rules / project-context）：在首个 gate 检查点补锁。
+  // 此时内容已被 /spec:init / 用户填充，不再是空模板，避免 install 时锁空模板导致首跑误伤。
+  const config = readConfig(projectRoot);
+  const locks = readLocks(projectRoot);
+  for (const rule of (config.protectedFiles || [])) {
+    if (rule.lockAfter !== 'always') continue;
+    for (const f of findMatchingFiles(projectRoot, rule.pattern)) {
+      if (!locks.files[f]) tryLock(f, rule.reason);
+    }
+  }
+
+  return result;
 }
 
 /**

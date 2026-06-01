@@ -421,7 +421,9 @@ function cmdInstall(args) {
     const guard = require('./guard');
     if (!guard.isInstalled(projectRoot)) {
       log.info('');
-      guard.cmdGuardInstall(projectRoot);
+      // deferAlwaysLock：此刻 domain-rules / project-context 还是空模板，
+      // 延后到首个 gate 通过后再锁，避免 /spec:init 正常填充被误判为篡改
+      guard.cmdGuardInstall(projectRoot, { deferAlwaysLock: true });
     } else {
       log.info('Guard 护栏已安装，跳过');
     }
@@ -2148,11 +2150,23 @@ async function cmdGate(args) {
         log.warn(`写入 ${phase} 哨兵失败：${e.message}`);
       }
     }
-    // guard 集成：gate 通过后自动锁定 spec.md
+    // guard 集成：gate 通过后自动锁定 spec.md（+ 首个 gate 补锁 always 文件）
     try {
       const guard = require('./guard');
-      guard.onGatePassed(projectRoot, changeName, phase);
-    } catch { /* guard 未安装时静默跳过 */ }
+      if (guard.isInstalled(projectRoot)) {
+        const res = guard.onGatePassed(projectRoot, changeName, phase);
+        if (res && res.failures && res.failures.length > 0) {
+          // P2：锁定失败不能静默 —— 否则用户以为 spec 已冻结，实际没锁，后续可被改写绕过
+          for (const f of res.failures) {
+            log.warn(`Guard 自动锁定失败：${f.file} — ${f.error}`);
+          }
+          log.warn('  上述文件未被冻结，后续改动不会被 gate 拦截；请人工运行 spec-copilot guard lock');
+        }
+      }
+    } catch (e) {
+      // 仅 guard 模块自身异常才放过；未安装已由前置逻辑处理
+      if (process.env.SPEC_COPILOT_DEBUG) log.warn(`guard onGatePassed 异常（已跳过）: ${e.message}`);
+    }
 
     log.ok(`Gate 通过 ✓ — 可以进入 ${phase} 阶段`);
     process.exit(0);

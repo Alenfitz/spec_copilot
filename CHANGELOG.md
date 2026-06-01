@@ -4,6 +4,24 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.28] - 2026-06-01
+
+### Guard first-run regression fix
+
+v4.0.27 armed Guard by default but introduced a first-run regression: `install` creates empty `project-context.md` / `domain-rules.md` templates, then immediately `guard install` locks them (`lockAfter: always`) recording the empty-template hash. When `/spec:init` later fills the context, the next gate's hash check flags that legitimate fill as tampering and blocks it — a first-run UX regression, not a security gain.
+
+Changes:
+
+- `cmdGuardInstall` gains a `deferAlwaysLock` option; install-time auto-arm defers locking the always-protected files.
+- `onGatePassed` locks the `always` files at the first passing gate (apply/smoke), when content is already filled — locking real content instead of an empty template.
+- `onGatePassed` now returns `{ locked, failures }`; the gate call site emits an explicit warning when guard is installed but auto-lock fails, instead of swallowing it silently (P2).
+- Added first-run regression tests: install does not lock empty templates; filling project-context.md does not trip the gate.
+
+Effect:
+
+- New projects: after `guard install`, `locks.json` is empty, so `/spec:init` filling context is not blocked.
+- After the first apply/smoke gate passes, spec.md + domain-rules.md + project-context.md get locked (protection preserved, just deferred to the right moment).
+
 ## [4.0.27] - 2026-06-01
 
 ### Guard armed by default

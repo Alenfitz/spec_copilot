@@ -62,6 +62,44 @@ test('install 默认上膛：自动生成 .spec-copilot/guard.json', () => {
   }
 });
 
+test('首跑回归：install 不锁空模板上下文（domain-rules / project-context 延后锁定）', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, ['install', '--tool', 'claude-code']);
+    const locks = JSON.parse(fs.readFileSync(path.join(dir, '.spec-copilot', 'locks.json'), 'utf-8'));
+    assert.ok(
+      !locks.files['spec_copilot/rules/project-context.md'],
+      'install 阶段不应锁定空模板 project-context.md（延后到首个 gate）'
+    );
+    assert.ok(
+      !locks.files['spec_copilot/rules/domain-rules.md'],
+      'install 阶段不应锁定空模板 domain-rules.md（延后到首个 gate）'
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('首跑回归：/spec:init 填充 project-context.md 后跑 gate 不被当成篡改', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, ['install', '--tool', 'claude-code']);
+
+    // 模拟 /spec:init 正常填充项目上下文
+    const ctx = path.join(dir, 'spec_copilot', 'rules', 'project-context.md');
+    fs.appendFileSync(ctx, '\n## 技术栈\n- 后端：Spring Boot\n- 前端：Vue3\n');
+
+    writeMinimalChange(dir, 'demo', 'apply');
+    const { out } = runIn(dir, ['gate', 'demo', 'apply']);
+
+    // 关键：填充上下文是合法行为，绝不能被 guard 当成"被篡改"拦截
+    assert.doesNotMatch(out, /guard 拦截/, '填充 project-context.md 不应触发 guard 拦截');
+    assert.doesNotMatch(out, /完整性校验失败/, '填充 project-context.md 不应触发完整性校验失败');
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('篡改已锁定的 spec → gate 拦截（非零退出）', () => {
   const dir = mkTmp();
   try {
