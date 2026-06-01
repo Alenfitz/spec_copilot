@@ -79,13 +79,14 @@ test('install: 模板文件正确拷贝（spec.md / tasks.md / log.md）', () =>
   }
 });
 
-test('install: spec_copilot/commands 为 13 个目录式命令文件', () => {
+test('install: spec_copilot/commands 为 14 个目录式命令文件', () => {
   const dir = mkTmp();
   try {
     runIn(dir, 'install --tool claude-code');
     const specDir = path.join(dir, 'spec_copilot', 'commands', 'spec');
     const files = fs.readdirSync(specDir).filter(name => name.endsWith('.md')).sort();
-    assert.strictEqual(files.length, 13, `expected 13 commands, got ${files.length}: ${files.join(', ')}`);
+    assert.strictEqual(files.length, 14, `expected 14 commands, got ${files.length}: ${files.join(', ')}`);
+    assert.ok(files.includes('agent-check.md'));
     assert.ok(files.includes('docs.md'));
     assert.ok(files.includes('flow.md'));
   } finally {
@@ -172,6 +173,53 @@ test('install --tool all: 多工具同时安装', () => {
     assert.ok(fs.existsSync(path.join(dir, 'CLAUDE.md')), 'claude-code 已装');
     assert.ok(fs.existsSync(path.join(dir, '.cursorrules')), 'cursor 已装');
     assert.ok(fs.existsSync(path.join(dir, 'AGENTS.md')), 'opencode 已装');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('install --tool opencode: 安装到 .opencode/agents 并使用 permission frontmatter', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool opencode');
+    const agentFile = path.join(dir, '.opencode', 'agents', 'spec-compliance-reviewer.md');
+    assert.ok(fs.existsSync(agentFile), '.opencode/agents/spec-compliance-reviewer.md 应存在');
+    assert.ok(!fs.existsSync(path.join(dir, '.opencode', 'agent')), '不应再创建旧目录 .opencode/agent');
+
+    const content = fs.readFileSync(agentFile, 'utf-8');
+    assert.ok(/^mode:\s*subagent$/m.test(content), 'opencode agent 应声明 mode: subagent');
+    assert.ok(/^permission:\s*$/m.test(content), 'opencode agent 应使用 permission 配置');
+    assert.ok(!/^tools:\s*$/m.test(content), 'opencode agent 不应使用旧 tools 配置');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('agents verify: 能发现 opencode 旧目录残留', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool opencode');
+    fs.mkdirSync(path.join(dir, '.opencode', 'agent'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.opencode', 'agent', 'spec-compliance-reviewer.md'), 'old', 'utf-8');
+
+    const out = runIn(dir, 'agents verify --tool opencode');
+    assert.ok(out && out.error, `verify 应失败但通过了: ${JSON.stringify(out)}`);
+    assert.ok(
+      `${out.stdout}\n${out.stderr}`.includes('旧版目录') ||
+      `${out.stdout}\n${out.stderr}`.includes('agent verify 失败'),
+      `verify 输出应说明旧目录问题: ${JSON.stringify(out)}`,
+    );
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('agents verify: opencode 新目录和 frontmatter 正确时通过', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, 'install --tool opencode');
+    const out = runIn(dir, 'agents verify --tool opencode');
+    assert.ok(out.includes('agent verify 通过'), `verify 输出异常: ${out}`);
   } finally {
     cleanup(dir);
   }

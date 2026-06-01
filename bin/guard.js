@@ -84,6 +84,14 @@ function ensureGuardDir(projectRoot) {
   }
 }
 
+/**
+ * guard 是否已安装（已写过 guard.json）
+ * 未安装时 gate 的 hash 校验等于没有保护 — 必须区别对待，不能静默当成"通过"
+ */
+function isInstalled(projectRoot) {
+  return fs.existsSync(guardConfigPath(projectRoot));
+}
+
 function readConfig(projectRoot) {
   const cfgPath = guardConfigPath(projectRoot);
   if (fs.existsSync(cfgPath)) {
@@ -584,6 +592,7 @@ module.exports = {
   onGatePassed,
   onGateCheck,
   verifyIntegrity,
+  isInstalled,
   readConfig,
   readLocks,
   DEFAULT_RULES,

@@ -28,6 +28,7 @@ test('review-checks: 模块导出所有期望函数', () => {
   assert.strictEqual(typeof reviewChecks.checkRouteCompleteness, 'function');
   assert.strictEqual(typeof reviewChecks.checkRuleCoverage, 'function');
   assert.strictEqual(typeof reviewChecks.checkWritePersistenceClosure, 'function');
+  assert.strictEqual(typeof reviewChecks.checkWriteFieldConsumption, 'function');
 });
 
 test('checkApiContract: 空 spec → 不报错，返回 pass', () => {
@@ -449,6 +450,242 @@ class AddressService {
 | API01 | POST | /api/addresses/save | \`src/api/address.ts#saveAddress\` | \`AddressController#save\` | F01 |
 `;
     const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, true);
+    assert.strictEqual(result.matched, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWriteFieldConsumption: 字段清单声明的写入字段未被后端消费时失败', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+
+  public TicketController(TicketService ticketService) {
+    this.ticketService = ticketService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return ticketService.create(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketService.java'), `
+import java.util.Map;
+
+class TicketService {
+  private final TicketRepository ticketRepository;
+
+  public TicketService(TicketRepository ticketRepository) {
+    this.ticketRepository = ticketRepository;
+  }
+
+  public Object create(Map<String, Object> request) {
+    return ticketRepository.save(request);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+
+### 6.2 接口字段清单
+| API ID | Required Fields | Optional Fields | Response Fields | Error Fields |
+|-------|-----------------|-----------------|-----------------|--------------|
+| API01 | \`title\`, \`description\` |  | \`id\`, \`title\` | \`message\` |
+`;
+    const result = reviewChecks.checkWriteFieldConsumption(dir, spec);
+    assert.strictEqual(result.pass, false);
+    assert.deepStrictEqual(result.risks[0].missingFields, ['title', 'description']);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWriteFieldConsumption: 字段清单声明的写入字段在 service 中被消费时通过', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+
+  public TicketController(TicketService ticketService) {
+    this.ticketService = ticketService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return ticketService.create(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketService.java'), `
+import java.util.Map;
+
+class TicketService {
+  private final TicketRepository ticketRepository;
+
+  public TicketService(TicketRepository ticketRepository) {
+    this.ticketRepository = ticketRepository;
+  }
+
+  public Object create(Map<String, Object> request) {
+    Ticket ticket = new Ticket();
+    ticket.setTitle((String) request.get("title"));
+    ticket.setDescription((String) request.get("description"));
+    return ticketRepository.save(ticket);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+
+### 6.2 接口字段清单
+| API ID | Required Fields | Optional Fields | Response Fields | Error Fields |
+|-------|-----------------|-----------------|-----------------|--------------|
+| API01 | \`title\`, \`description\` |  | \`id\`, \`title\` | \`message\` |
+`;
+    const result = reviewChecks.checkWriteFieldConsumption(dir, spec);
+    assert.strictEqual(result.pass, true);
+    assert.strictEqual(result.matched, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWriteFieldConsumption: 字段清单存在但写入字段为空时跳过', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  @PostMapping("/save")
+  public Object save() { return null; }
+}
+`, 'utf-8');
+
+    const spec = `
+# 工单保存
+
+## 6. 接口契约
+\`POST /api/tickets/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+
+### 6.2 接口字段清单
+| API ID | Required Fields | Optional Fields | Response Fields | Error Fields |
+|-------|-----------------|-----------------|-----------------|--------------|
+| API01 |  |  | \`id\` | \`message\` |
+`;
+    const result = reviewChecks.checkWriteFieldConsumption(dir, spec);
+    assert.strictEqual(result.pass, true);
+    assert.strictEqual(result.checked, 0);
+    assert.strictEqual(result.skipped, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWriteFieldConsumption: snake_case 字段可由 camelCase getter 或字符串 key 消费', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'UserController.java'), `
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/users")
+class UserController {
+  private final UserService userService;
+
+  public UserController(UserService userService) {
+    this.userService = userService;
+  }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody UserRequest request) {
+    return userService.create(request);
+  }
+}
+`, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'UserService.java'), `
+class UserService {
+  private final UserRepository userRepository;
+
+  public UserService(UserRepository userRepository) {
+    this.userRepository = userRepository;
+  }
+
+  public Object create(UserRequest request) {
+    User user = new User();
+    user.setUserName(request.getUserName());
+    user.setDisplayName(request.getMeta("displayName"));
+    return userRepository.save(user);
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+# 用户保存
+
+## 6. 接口契约
+\`POST /api/users/save\`
+
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/users/save | \`src/api/user.ts#saveUser\` | \`UserController#save\` | F01 |
+
+### 6.2 接口字段清单
+| API ID | Required Fields | Optional Fields | Response Fields | Error Fields |
+|-------|-----------------|-----------------|-----------------|--------------|
+| API01 | \`user_name\`, \`display_name\` |  | \`id\` | \`message\` |
+`;
+    const result = reviewChecks.checkWriteFieldConsumption(dir, spec);
     assert.strictEqual(result.pass, true);
     assert.strictEqual(result.matched, 1);
   } finally {

@@ -39,6 +39,7 @@
 | "自动完成 xxx" | /spec:flow |
 | "开始写代码" / "继续执行" | /spec:apply |
 | "review 一下" | /spec:review |
+| "检查 subagent" | /spec:agent-check |
 | "写测试" | /spec:test |
 | "归档 xxx" | /spec:archive |
 | "线上出问题了" | /spec:hotfix |
@@ -161,8 +162,9 @@ review 会按矩阵精确匹配代码，**比模糊 grep 更准**。
 > 不信报告，只信代码。每条结论必须附 `文件:行号` 证据。
 
 ### 强制独立子 Agent
-> /spec:review 阶段一必须通过 Agent 工具 spawn 独立子 agent 执行。
+> /spec:review 阶段一必须通过独立子 agent 执行。
 > 同一上下文既写代码又审代码 = 系统性自评偏差。
+> opencode 必须先通过 `/spec:agent-check` 快速探针；如果 review 显示 `General Task`，说明未命中指定 subagent，必须停止。
 > 不支持的宿主：主 agent 自己 Read profile 扮演，报告顶部标"独立性降级"。
 
 ### 内置 Agent Profiles

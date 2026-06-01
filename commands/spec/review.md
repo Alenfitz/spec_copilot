@@ -18,9 +18,9 @@ gate review 自动执行：
 - **错误处理审计**：所有 API 调用点是否有 catch
 - **硬编码身份检测**：前端是否写死当前用户/操作人
 
-## 阶段一：Spec Compliance（强制独立 agent）
+## 阶段一：Spec Compliance（独立 agent 优先）
 
-**Claude Code**：
+**Claude Code**（支持 sub-agent）：
 ```
 Agent({
   subagent_type: "spec-compliance-reviewer",
@@ -35,11 +35,17 @@ Agent({
 })
 ```
 
-**opencode**：用 task 工具，subagent_type=spec-compliance-reviewer。
+**opencode**：
+1. 必须优先调用 `.opencode/agents/spec-compliance-reviewer.md` 对应的 subagent 执行。
+2. 不要使用 `subagent_type=...` 这类 Claude 风格参数；使用 opencode 的 Task/subagent 调用能力，或明确 `@spec-compliance-reviewer`。
+3. 如果界面显示 `General Task - Spec Compliance Review`，说明没有命中指定 subagent，必须立即停止并提示先执行 `/spec:agent-check`，不得由主 agent 代办。
 
-**其它宿主**：主 agent 自己 Read profile 扮演执行，报告顶部标"独立性降级"。
+**其它宿主**：
+1. Read `spec_copilot/agents/spec-compliance-reviewer.md` 完整内容。
+2. 严格按 profile 中的 Step 1-6 执行检查。
+3. 报告顶部标注：`⚠️ 本报告由主 agent 扮演 reviewer 生成，未使用独立上下文，结论可靠性降级`。
 
-**子 agent 返回后，主 agent 不得 override 或软化结论。**
+**无论哪种方式，返回的报告主 agent 不得 override 或软化结论。**
 
 阶段一不通过（功能点覆盖率太低或有 Critical 不一致）→ 返回 `/spec:fix`。
 
@@ -51,7 +57,12 @@ Agent({
 ## 阶段三：Adversarial Test（🔴 复杂需求强制）
 
 阶段一二都通过后跑。
-调用 `subagent_type: adversarial-tester`，提供 spec + 项目根 + 阶段一报告。
+
+**Claude Code**：调用 `subagent_type: adversarial-tester`，提供 spec + 项目根 + 阶段一报告。
+
+**opencode**：必须优先调用 `.opencode/agents/adversarial-tester.md` 对应的 subagent；如果降级为 General Task，立即停止并提示 `/spec:agent-check`。
+
+**其它宿主**：Read `spec_copilot/agents/adversarial-tester.md`，按 profile 扮演执行，报告标注降级。
 
 阶段三发现 Critical → `/spec:fix` 修复后重跑阶段三。
 
