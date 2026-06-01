@@ -89,11 +89,17 @@ function runGateReview(projectRoot) {
   }
 }
 
-function addSmokePass(changeDir) {
-  fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), JSON.stringify({
-    timestamp: Date.now(),
-    version: '4.0.22',
-  }), 'utf-8');
+function addSmokePass(projectRoot, changeDir) {
+  const cli = path.join(__dirname, '..', 'bin', 'cli.js');
+  try {
+    execSync(`node "${cli}" gate demo smoke`, {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    // 部分夹具没有完整可构建项目；此处只需要真实 gate 写出的签名哨兵。
+  }
   fs.appendFileSync(path.join(changeDir, 'log.md'), '\nsmoke 已通过\n', 'utf-8');
 }
 
@@ -438,7 +444,7 @@ test('gate review: 不可降级项不能通过降级处理绕过', () => {
 `
     );
     const changeDir = path.join(dir, 'spec_copilot', 'changes', 'demo');
-    addSmokePass(changeDir);
+    addSmokePass(dir, changeDir);
     const result = runGateReview(dir);
     const output = `${result.stdout}\n${result.stderr}`;
     assert.strictEqual(result.pass, false);

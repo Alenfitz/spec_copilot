@@ -66,12 +66,9 @@ ${logExtra}
 | 偏差点 | Spec 预期 | 实际情况 | 处理方式 |
 | 无 | 无 | 无 | 无 |
 `);
-  fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), '{}');
   if (withReviewSentinel) {
-    fs.writeFileSync(path.join(changeDir, '.gate-review-passed'), JSON.stringify({
-      timestamp: Date.now(),
-      version: 'test',
-    }));
+    runGate(dir, 'complex', 'smoke');
+    runGate(dir, 'complex', 'review');
   }
   return changeDir;
 }
@@ -110,7 +107,7 @@ test('archive gate: explicit incomplete declaration blocks archive', () => {
     const changeDir = setupChange(dir, {
       logExtra: '| 2026-05-25 | test | 测试报告：总计：1 个用例，1 通过，0 失败 | mock |',
     });
-    fs.writeFileSync(path.join(changeDir, '.gate-test-passed'), '{}');
+    runGate(dir, 'complex', 'test', '--record-pass');
     fs.writeFileSync(path.join(changeDir, 'tasks.md'), `# Tasks
 ## 变更摘要
 - 实测：1 个文件修改
@@ -131,10 +128,27 @@ test('archive gate: clean complex change with review and test sentinels passes',
     const changeDir = setupChange(dir, {
       logExtra: '| 2026-05-25 | test | 测试报告：总计：1 个用例，1 通过，0 失败 | mock |',
     });
-    fs.writeFileSync(path.join(changeDir, '.gate-test-passed'), '{}');
+    runGate(dir, 'complex', 'test', '--record-pass');
     const out = runGate(dir, 'complex', 'archive');
     assert.match(out, /Gate 通过/);
     assert.doesNotMatch(out, /归档阻断|缺少 \.gate-test-passed/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('archive gate: forged unsigned sentinels are rejected', () => {
+  const dir = mkTmp();
+  try {
+    const changeDir = setupChange(dir, {
+      logExtra: '| 2026-05-25 | test | 测试报告：总计：1 个用例，1 通过，0 失败 | mock |',
+      withReviewSentinel: false,
+    });
+    fs.writeFileSync(path.join(changeDir, '.gate-review-passed'), '{}');
+    fs.writeFileSync(path.join(changeDir, '.gate-test-passed'), '{}');
+    const out = runGate(dir, 'complex', 'archive');
+    assert.match(out, /哨兵无效|缺少 gate 签名|旧格式哨兵/);
+    assert.match(out, /Gate 未通过/);
   } finally {
     cleanup(dir);
   }

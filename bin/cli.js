@@ -19,6 +19,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const { adapters, detectTools, supportedTools, parseAgentMeta, detectStack, buildStackContext } = require('../adapters');
 const {
@@ -46,6 +47,7 @@ const {
 
 const BUILTIN_ADAPTERS = ['_template.md', 'nextjs.md', 'react-express.md', 'spring-boot-vue3.md'];
 const TOOL_STATE_FILE = '.spec-copilot-tool'; // 记录使用的工具
+const SENTINEL_KEY_FILE = 'sentinel.key';
 
 // ─── 工具函数 ───────────────────────────────────────────────
 
@@ -183,6 +185,108 @@ function readJsonSafe(filePath) {
   } catch {
     return null;
   }
+}
+
+function ensureLocalStateDir(projectRoot) {
+  const dir = path.join(projectRoot, '.spec-copilot');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const gi = path.join(dir, '.gitignore');
+  const required = [SENTINEL_KEY_FILE, '*.tmp'];
+  let content = fs.existsSync(gi) ? fs.readFileSync(gi, 'utf-8') : '# spec-copilot local state\n';
+  let changed = false;
+  for (const line of required) {
+    if (!content.split(/\r?\n/).includes(line)) {
+      content += `${content.endsWith('\n') ? '' : '\n'}${line}\n`;
+      changed = true;
+    }
+  }
+  if (!fs.existsSync(gi) || changed) fs.writeFileSync(gi, content, 'utf-8');
+  return dir;
+}
+
+function ensureSentinelKey(projectRoot) {
+  const dir = ensureLocalStateDir(projectRoot);
+  const keyPath = path.join(dir, SENTINEL_KEY_FILE);
+  if (!fs.existsSync(keyPath)) {
+    fs.writeFileSync(keyPath, crypto.randomBytes(32).toString('hex') + '\n', 'utf-8');
+  }
+  return fs.readFileSync(keyPath, 'utf-8').trim();
+}
+
+function readSentinelKey(projectRoot) {
+  const keyPath = path.join(projectRoot, '.spec-copilot', SENTINEL_KEY_FILE);
+  if (!fs.existsSync(keyPath)) return null;
+  return fs.readFileSync(keyPath, 'utf-8').trim();
+}
+
+function canonicalSentinelPayload(data) {
+  return JSON.stringify({
+    schema: data.schema,
+    phase: data.phase,
+    changeName: data.changeName,
+    timestamp: data.timestamp,
+    version: data.version,
+  });
+}
+
+function signSentinel(projectRoot, data) {
+  const key = ensureSentinelKey(projectRoot);
+  return crypto.createHmac('sha256', key)
+    .update(canonicalSentinelPayload(data))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+function writeGateSentinel(projectRoot, changeDir, changeName, phase) {
+  const sentinelName = phase === 'smoke'
+    ? '.gate-smoke-passed'
+    : phase === 'review'
+      ? '.gate-review-passed'
+      : '.gate-test-passed';
+  const sentinelPath = path.join(changeDir, sentinelName);
+  const data = {
+    schema: 1,
+    phase,
+    changeName,
+    timestamp: Date.now(),
+    version: readVersion(),
+  };
+  data.signature = signSentinel(projectRoot, data);
+  fs.writeFileSync(sentinelPath, JSON.stringify(data, null, 2) + '\n');
+  return sentinelPath;
+}
+
+function verifyGateSentinel(projectRoot, changeDir, changeName, phase) {
+  const sentinelName = phase === 'smoke'
+    ? '.gate-smoke-passed'
+    : phase === 'review'
+      ? '.gate-review-passed'
+      : '.gate-test-passed';
+  const sentinelPath = path.join(changeDir, sentinelName);
+  if (!fs.existsSync(sentinelPath)) {
+    return { pass: false, exists: false, file: sentinelPath, reason: `缺少 ${sentinelName}` };
+  }
+
+  const data = readJsonSafe(sentinelPath);
+  if (!data || data.schema !== 1 || !data.signature) {
+    return { pass: false, exists: true, file: sentinelPath, reason: `${sentinelName} 缺少 gate 签名，疑似手写或旧格式哨兵` };
+  }
+  if (data.phase !== phase || data.changeName !== changeName) {
+    return { pass: false, exists: true, file: sentinelPath, reason: `${sentinelName} 阶段或变更名不匹配` };
+  }
+
+  const key = readSentinelKey(projectRoot);
+  if (!key) {
+    return { pass: false, exists: true, file: sentinelPath, reason: '缺少本地 sentinel.key，无法验证 gate 哨兵签名' };
+  }
+  const expected = crypto.createHmac('sha256', key)
+    .update(canonicalSentinelPayload(data))
+    .digest('hex')
+    .slice(0, 32);
+  if (data.signature !== expected) {
+    return { pass: false, exists: true, file: sentinelPath, reason: `${sentinelName} 签名无效，疑似伪造或复制旧哨兵` };
+  }
+  return { pass: true, exists: true, file: sentinelPath, data };
 }
 
 function hasExplicitIncompleteDeclaration(text) {
@@ -1005,15 +1109,12 @@ async function cmdGate(args) {
     }
     case 'review': {
       // ─── smoke gate 哨兵检查（v2.2.0）───
-      const smokeSentinel = path.join(changeDir, '.gate-smoke-passed');
-      if (fs.existsSync(smokeSentinel)) {
-        try {
-          const smokeData = JSON.parse(fs.readFileSync(smokeSentinel, 'utf-8'));
-          const ageMin = Math.round((Date.now() - smokeData.timestamp) / 60000);
-          passOk(`smoke gate 哨兵有效（${ageMin} 分钟前通过）`, 'SMOKE_SENTINEL');
-        } catch {
-          passOk('smoke gate 哨兵有效', 'SMOKE_SENTINEL');
-        }
+      const smokeGate = verifyGateSentinel(projectRoot, changeDir, changeName, 'smoke');
+      if (smokeGate.pass) {
+        const ageMin = Math.round((Date.now() - smokeGate.data.timestamp) / 60000);
+        passOk(`smoke gate 哨兵有效（${ageMin} 分钟前通过 / framework v${smokeGate.data.version || 'unknown'}）`, 'SMOKE_SENTINEL');
+      } else if (smokeGate.exists) {
+        fail(`smoke gate 哨兵无效 — ${smokeGate.reason}。请重新运行 \`gate <name> smoke\``, 'SMOKE_SENTINEL');
       } else {
         log.warn('未检测到 smoke gate 哨兵（.gate-smoke-passed）— 建议先运行 `gate <name> smoke`');
       }
@@ -1905,17 +2006,14 @@ async function cmdGate(args) {
       }
 
       if (isComplex) {
-        const testSentinel = path.join(changeDir, '.gate-test-passed');
-        if (!fs.existsSync(testSentinel)) {
+        const testGate = verifyGateSentinel(projectRoot, changeDir, changeName, 'test');
+        if (!testGate.exists) {
           fail('🔴 复杂需求缺少 .gate-test-passed 哨兵 — review 后必须执行 /spec:test，不能直接 archive');
+        } else if (!testGate.pass) {
+          fail(`🔴 复杂需求 .gate-test-passed 哨兵无效 — ${testGate.reason}。必须重新执行 \`gate <name> test --record-pass\``);
         } else {
-          const sentinelData = readJsonSafe(testSentinel);
-          if (sentinelData?.timestamp) {
-            const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
-            log.ok(`test gate 哨兵有效（${ageMin} 分钟前 / framework v${sentinelData.version || 'unknown'}）`);
-          } else {
-            log.ok('test gate 哨兵有效');
-          }
+          const ageMin = Math.round((Date.now() - testGate.data.timestamp) / 60000);
+          log.ok(`test gate 哨兵有效（${ageMin} 分钟前 / framework v${testGate.data.version || 'unknown'}）`);
         }
       }
 
@@ -1939,12 +2037,14 @@ async function cmdGate(args) {
       }
 
       // 2. 必须有 review gate 通过的哨兵文件（防止模型自己写"通过"绕过 review gate）
-      const reviewSentinel = path.join(changeDir, '.gate-review-passed');
-      if (!fs.existsSync(reviewSentinel)) {
+      const reviewGate = verifyGateSentinel(projectRoot, changeDir, changeName, 'review');
+      if (!reviewGate.exists) {
         fail('缺少 .gate-review-passed 哨兵 — 模型不能仅靠在 spec.md §12 写"通过"就 archive，必须实际跑过 `gate <name> review` 且通过');
+      } else if (!reviewGate.pass) {
+        fail(`.gate-review-passed 哨兵无效 — ${reviewGate.reason}。必须重新运行 \`gate <name> review\``);
       } else {
         // 3. 哨兵的 mtime 必须不早于 spec/tasks/log 的最后修改时间（任何后续编辑都会失效）
-        const sentinelTime = fs.statSync(reviewSentinel).mtimeMs;
+        const sentinelTime = fs.statSync(reviewGate.file).mtimeMs;
         const stale = [];
         const tolerance = 2000; // 2 秒容差，避免同秒写入误判
         for (const f of [specPath, tasksPath, logPath]) {
@@ -1957,14 +2057,8 @@ async function cmdGate(args) {
         if (stale.length > 0) {
           fail(`review 通过后下列文件被修改：${stale.join('，')} — 必须重新运行 \`gate <name> review\``);
         } else {
-          // 读取哨兵记录的 review 时间和版本
-          try {
-            const sentinelData = JSON.parse(fs.readFileSync(reviewSentinel, 'utf-8'));
-            const ageMin = Math.round((Date.now() - sentinelData.timestamp) / 60000);
-            log.ok(`review gate 哨兵有效（${ageMin} 分钟前通过 / framework v${sentinelData.version}）`);
-          } catch {
-            log.ok('review gate 哨兵有效');
-          }
+          const ageMin = Math.round((Date.now() - reviewGate.data.timestamp) / 60000);
+          log.ok(`review gate 哨兵有效（${ageMin} 分钟前通过 / framework v${reviewGate.data.version || 'unknown'}）`);
         }
       }
       break;
@@ -2141,11 +2235,8 @@ async function cmdGate(args) {
           : phase === 'review'
             ? '.gate-review-passed'
             : '.gate-test-passed';
-        const sentinelPath = path.join(changeDir, sentinelName);
-        fs.writeFileSync(sentinelPath, JSON.stringify({
-          timestamp: Date.now(),
-          version: readVersion(),
-        }, null, 2) + '\n');
+        writeGateSentinel(projectRoot, changeDir, changeName, phase);
+        log.ok(`${sentinelName} 已写入 gate 签名`);
       } catch (e) {
         log.warn(`写入 ${phase} 哨兵失败：${e.message}`);
       }

@@ -4,6 +4,27 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.29] - 2026-06-01
+
+### Signed Gate Sentinels
+
+Main dimension: Tool Orchestration + Constraints.
+
+v4.0.17 introduced `.gate-*-passed` sentinels so later phases could require evidence that earlier gates ran. test05-style adversarial behavior exposed a gap: those sentinel files were ordinary JSON. A model could create `{}` or copy an old sentinel and make archive/review believe a previous phase had passed.
+
+Changes:
+
+- Gate-written sentinels now include a local HMAC signature over `schema`, `phase`, `changeName`, `timestamp`, and framework `version`.
+- The signing key is generated per project at `.spec-copilot/sentinel.key` and ignored by `.spec-copilot/.gitignore`.
+- `review` verifies `.gate-smoke-passed`; `archive` verifies `.gate-review-passed` and, for complex changes, `.gate-test-passed`.
+- Unsigned/old-format sentinels are rejected with a clear message instead of being treated as valid.
+- Tests now generate normal sentinels via real gate commands, and include a forged unsigned sentinel regression test.
+
+Boundary:
+
+- This blocks low-cost forgery (`touch`, `{}`, copying a sentinel from another change/phase) and makes gate evidence a real CLI-issued artifact.
+- It is not a claim of perfect cryptographic security against a model that can read local state and deliberately reimplement the signing algorithm. The next stronger layer is scaffold/amend provenance plus failure counters.
+
 ## [4.0.28] - 2026-06-01
 
 ### Guard first-run regression fix
@@ -50,7 +71,7 @@ Boundary:
 
 - This makes the problem harder to happen rather than just easier to surface: by default, tampering with `spec.md` is blocked at gate time.
 - It still does not prevent the AI from writing files — Guard's mechanism is "modified files fail the gate", not write denial.
-- Whether sentinel files (`.gate-*-passed`) are forgeable is deferred to v4.0.28.
+- Whether sentinel files (`.gate-*-passed`) are forgeable is deferred to a later release (fixed in v4.0.29).
 
 ## [4.0.26] - 2026-05-29
 

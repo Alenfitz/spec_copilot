@@ -2,6 +2,25 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.29] - 2026-06-01
+
+### Gate 哨兵签名（Tool Orchestration + Constraints）
+
+v4.0.17 引入 `.gate-*-passed` 哨兵，让后续阶段能要求前序 gate 的通过证据。但 test05 这类对抗性实验暴露出一个缺口：哨兵只是普通 JSON 文件，模型可以手写 `{}` 或复制旧哨兵，让 archive/review 误以为前序阶段已经通过。
+
+#### 变更
+
+- gate 写出的哨兵新增本地 HMAC 签名，签名绑定 `schema`、`phase`、`changeName`、`timestamp` 和框架版本
+- 每个项目自动生成 `.spec-copilot/sentinel.key`，并写入 `.spec-copilot/.gitignore`
+- `review` 校验 `.gate-smoke-passed`；`archive` 校验 `.gate-review-passed`，复杂需求还校验 `.gate-test-passed`
+- 未签名/旧格式哨兵会被明确拒绝，不再被当成有效通过证据
+- 测试夹具改为通过真实 gate 命令生成正常哨兵，并新增手写伪造哨兵被拒绝的回归测试
+
+#### 边界
+
+- 这能阻断低成本伪造（`touch`、`{}`、复制其它 change/phase 的哨兵），让 gate 证据变成 CLI 签发产物
+- 这不是对“能读取本地状态并复刻签名算法的模型”的绝对密码学防护；下一层需要 scaffold/amend 来源记录和 gate 失败止损计数器
+
 ## [4.0.28] - 2026-06-01
 
 ### Guard 首跑回归修复
@@ -46,7 +65,7 @@ test05 复盘暴露的结构性问题：Guard / Contract Freeze 代码早已写�
 
 - 这是"让问题更难发生"而非"更易暴露"：默认配置下篡改 spec 会被 gate 直接拦截
 - 仍不阻止 AI 修改文件本身——guard 的机制是"改了过不了 gate"，而非禁止写入
-- 哨兵文件（`.gate-*-passed`）是否可伪造留待 v4.0.28 处理
+- 哨兵文件（`.gate-*-passed`）是否可伪造留待后续版本处理（已在 v4.0.29 修复低成本伪造）
 
 ## [4.0.26] - 2026-05-29
 

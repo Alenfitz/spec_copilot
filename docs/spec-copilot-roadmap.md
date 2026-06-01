@@ -86,7 +86,7 @@
 | 逐 task 停顿 / Stage Lock | v1.0 / v4.0.16 | ✅ 默认生效 | prompt 层约束，强模型遵守度高 |
 | Smoke 构建/骨架/E2E 检测 | v2.2 / v2.3 | ✅ 默认生效 | gate 运行即检查，不依赖额外安装 |
 | Guard hash 校验 / Contract Freeze | v2.6 / v4.0.18 → v4.0.27/28 | ✅ **默认生效（v4.0.27 上膛，v4.0.28 修首跑回归）** | `install` 默认 `guard install`；gate 未安装时强警告而非静默放行。v4.0.28 修复：永久保护文件延后到首个 gate 通过后再锁，避免锁空模板误伤 `/spec:init` 填充 |
-| Gate 哨兵（`.gate-*-passed`） | v4.0.17 | ⚠️ **疑似可伪造，待确认** | 哨兵是 change 目录下的普通文件；需确认是否带 gate 才能算出的签名，否则 `touch` 即可伪造前序阶段已通过 |
+| Gate 哨兵（`.gate-*-passed`） | v4.0.17 → v4.0.29 | ✅ **默认生效（签名哨兵）** | gate 写出的哨兵带本地 HMAC 签名并绑定 phase/changeName；可阻断 `touch`、`{}`、跨阶段/跨变更复制这类低成本伪造。边界：不是对能读取本地 key 并复刻算法的模型的绝对密码学防护 |
 | V-Slice 自填验证结果 | v4.0.22 | ⚠️ **可被自填造假** | "实际验证结果"由模型粘贴而非工具执行记录；test05 中前端未做但 curl 结果看起来规整 |
 | 写接口持久化 / 字段消费检查 | v4.0.24 / v4.0.25 | ⚠️ **可被 token 注入绕过** | 基于 grep/正则匹配；加一行注释或字段字符串即可让检查通过（test05 §1.3 标记注入） |
 | OpenCode subagent 安装校验 | v4.0.26 | ◐ 静态校验生效，运行时未保证 | `agents verify` 校验目录/frontmatter 格式；但"真 reviewer 实际跑了并给出独立结论"需靠 `/spec:agent-check` 运行时探针，verify 通过 ≠ 调用未降级 |
@@ -123,7 +123,7 @@
 
 优先事项（按顺序）：
 1. **Guard 默认上膛**（最高优先，改动最小）：`install` 流程默认执行 `guard install`；gate 的 hash 校验 `catch{}` 改成区分"未安装 → 强警告并提示一键启用"与"校验失败 → 拦截"，**不再静默放行**。
-2. **哨兵防伪**：确认 `.gate-*-passed` 是否可 `touch` 伪造；若可，加 gate 才能算出的签名（复用 guard sha256）。
+2. **哨兵防伪**：确认 `.gate-*-passed` 是否可 `touch` 伪造；若可，加 gate 才能算出的签名。✅ v4.0.29 已完成低成本伪造防护。
 3. **`spec-copilot scaffold`**：change 目录由工具创建，自带 `.scaffold-meta.json`（创建时间、命令来源、spec 初始 hash snapshot）。gate 可检测"是否经 scaffold 创建"。
 4. **`spec-copilot amend --reason`**：apply 之后改 spec 必须走 amend，在 log.md 留 diff + 原因；gate 对比当前 spec hash 与 scaffold snapshot，不一致且无 amend 记录 → fail。
 5. OpenCode subagent 运行时调用探针深化（v4.0.26 已完成静态校验第一版：`agents verify` + `/spec:agent-check`），把"真 reviewer 实际跑了"也变成可检查事实。
@@ -178,7 +178,7 @@
 
 分三段推进，每段都能在 test05 这条真实路径上独立验证。顺序原则：**先让已有机制真生效，再让篡改留痕，最后升级检查手段。**
 
-### 第一段：让已有的枪上膛（v4.0.27 – v4.0.29）
+### 第一段：让已有的枪上膛（v4.0.27 – v4.0.30）
 
 > 目标：把"已写好但默认失效"的机制变成默认生效。零新检查，纯接线。
 
@@ -186,14 +186,16 @@
   - 验收：重跑 test05 路径，AI 改 spec.md 后 gate 必然拦截。✅ 已完成
 - **v4.0.28 — Guard 首跑回归修复**：上膛后发现首跑回归——install 锁了空模板上下文，`/spec:init` 正常填充被误判为篡改。改为永久保护文件延后到首个 gate 通过后锁定；`onGatePassed` 锁定失败不再静默（P2）。
   - 验收：填充 project-context.md 后 gate 不误判；首个 gate 通过后上下文文件被正确锁定。✅ 已完成
-- **v4.0.29 — 哨兵防伪 + 止损计数器**：确认并修复 `.gate-*-passed` 可伪造问题；gate 同一 check 连续失败 N 次强制暂停转人工。
-  - 验收：伪造哨兵被识破；连续 fix 死循环在第 N 次被掐断。
+- **v4.0.29 — 哨兵防伪**：确认并修复 `.gate-*-passed` 可伪造问题；gate 哨兵由 CLI 签名签发，旧格式/手写哨兵无效。
+  - 验收：伪造哨兵被识破。✅ 已完成
+- **v4.0.30 — 止损计数器**：gate 同一 check 连续失败 N 次强制暂停转人工。
+  - 验收：连续 fix 死循环在第 N 次被掐断。
 
-### 第二段：让篡改留痕（v4.0.29 – v4.1.0）
+### 第二段：让篡改留痕（v4.0.30/31 – v4.1.0）
 
 > 目标：test05 点名的最高杠杆项——工具入口。
 
-- **v4.0.29 — `scaffold` MVP**：`spec-copilot scaffold <name>` 创建 change 目录 + `.scaffold-meta.json`（创建时间、命令来源、spec 初始 hash）；apply gate 检测无 meta → warn（先观察）。
+- **v4.0.30/31 — `scaffold` MVP**：`spec-copilot scaffold <name>` 创建 change 目录 + `.scaffold-meta.json`（创建时间、命令来源、spec 初始 hash）；apply gate 检测无 meta → warn（先观察）。
 - **v4.1.0 — `amend` + spec 变更预算**：改 spec 必须走 `amend --reason` 留痕；apply 后 spec hash vs snapshot 不一致且无 amend 记录 → fail；变更预算超限须用户确认。
   - 验收："合并功能点 23→18"这类动作必然在 log.md 留下显眼记录。
 

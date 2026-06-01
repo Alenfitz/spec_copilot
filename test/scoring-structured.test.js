@@ -33,6 +33,16 @@ function runGate(projectRoot, name, phase) {
   }
 }
 
+function runGateArgs(projectRoot, name, phase, extra = '') {
+  try {
+    return execSync(`node "${CLI}" gate ${name} ${phase} ${extra}`, {
+      cwd: projectRoot, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    return (e.stdout || '') + (e.stderr || '');
+  }
+}
+
 function setupMinimalProject(dir, options = {}) {
   const {
     logMd = `# Log
@@ -64,8 +74,7 @@ test
 `);
   fs.writeFileSync(path.join(changeDir, 'log.md'), logMd);
   if (withSmokeSentinel) {
-    // 假装跑过 smoke
-    fs.writeFileSync(path.join(changeDir, '.gate-smoke-passed'), '{}');
+    runGateArgs(dir, 'minimal', 'smoke');
   }
 }
 
