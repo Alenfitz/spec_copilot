@@ -46,21 +46,21 @@ function parseAgentMeta(content) {
 
 /**
  * opencode agent frontmatter 模板
- * 最后验证版本：opencode 2024-Q1（如 opencode frontmatter schema 改变需更新此处）
- * 文档：https://github.com/sst/opencode 中关于 agent 配置的章节
+ * 当前 opencode 文档使用 .opencode/agents/*.md，并用 permission 控制工具权限。
+ * 文档：https://opencode.ai/docs/agents/
  */
 function buildOpencodeAgentFrontmatter(meta) {
   // 默认只读工具集；profile 可在 tools 字段显式声明（如 ["read","write","edit"]）
   const defaultTools = ['read', 'grep', 'glob', 'bash'];
   const requested = (meta.tools && meta.tools.length > 0) ? meta.tools : defaultTools;
   const allTools = ['read', 'grep', 'glob', 'bash', 'write', 'edit'];
-  const toolLines = allTools.map(t => `  ${t}: ${requested.includes(t) ? 'true' : 'false'}`);
+  const permissionLines = allTools.map(t => `  ${t}: ${requested.includes(t) ? 'allow' : 'deny'}`);
   return [
     '---',
     `description: ${meta.role || meta.name}`,
     'mode: subagent',
-    'tools:',
-    ...toolLines,
+    'permission:',
+    ...permissionLines,
     '---',
     '',
   ].join('\n');
@@ -107,6 +107,7 @@ function buildCommandRoutingSection() {
 | \`/spec:apply <变更名>\` | \`spec_copilot/commands/spec/apply.md\` |
 | \`/spec:smoke <变更名>\` | \`spec_copilot/commands/spec/smoke.md\` |
 | \`/spec:review <变更名>\` | \`spec_copilot/commands/spec/review.md\` |
+| \`/spec:agent-check\` | \`spec_copilot/commands/spec/agent-check.md\` |
 | \`/spec:fix <变更名>\` | \`spec_copilot/commands/spec/fix.md\` |
 | \`/spec:test <变更名>\` | \`spec_copilot/commands/spec/test.md\` |
 | \`/spec:archive <变更名>\` | \`spec_copilot/commands/spec/archive.md\` |
@@ -129,7 +130,8 @@ const adapters = {
     promptPath: 'AGENTS.md',
     commandsDir: '.opencode/commands',
     hasNativeCommands: true,
-    agentsDir: '.opencode/agent',  // 安装 sub-agent 的目录
+    agentsDir: '.opencode/agents',
+    legacyAgentsDir: '.opencode/agent',
     supportsSubagent: true,
 
     detect(projectRoot) {

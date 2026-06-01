@@ -12,7 +12,7 @@
 
 | 工具 | 提示词文件 | 命令方式 |
 |------|-----------|---------|
-| **opencode** | `AGENTS.md` | `.opencode/commands/`（原生） |
+| **opencode** | `AGENTS.md` | `.opencode/commands/`（原生）、`.opencode/agents/` |
 | **Claude Code** | `CLAUDE.md` | `.claude/commands/`（原生） |
 | **Cursor** | `.cursor/rules/spec-copilot.mdc` + `.cursorrules`（legacy） | Prompt 路由 |
 | **Windsurf** | `.windsurf/rules/spec-copilot.md` + `.windsurfrules`（legacy） | Prompt 路由 |
@@ -91,7 +91,7 @@ npx @alenfitz/spec-copilot uninstall --confirm       # 移除框架
 ├── <工具专属命令目录/>               ← 原生命令（如支持）
 │
 └── spec_copilot/
-    ├── commands/                      ← 13 个命令定义
+    ├── commands/                      ← 14 个命令定义
     ├── rules/
     │   ├── coding-style.md            ← 编码通用规范
     │   ├── security.md                ← 安全红线

@@ -731,6 +731,105 @@ function hasCalledServicePersistence(projectRoot, backendCall, context) {
   return false;
 }
 
+function collectDirectServiceBodies(projectRoot, backendCall) {
+  const controllerPath = path.join(projectRoot, backendCall.file);
+  const controllerContent = readSafe(controllerPath);
+  const services = extractInjectedServices(controllerContent);
+  const bodies = [];
+
+  for (const service of services) {
+    const callRegex = new RegExp(`\\b${service.name}\\s*\\.\\s*([A-Za-z0-9_$]+)\\s*\\(`, 'g');
+    let m;
+    while ((m = callRegex.exec(backendCall.body || '')) !== null) {
+      const serviceFile = findJavaClassFile(projectRoot, service.type);
+      if (!serviceFile) continue;
+      const serviceContent = readSafe(serviceFile);
+      const serviceBody = extractJavaMethodBody(serviceContent, m[1]);
+      if (serviceBody) bodies.push({
+        type: service.type,
+        method: m[1],
+        file: path.relative(projectRoot, serviceFile),
+        body: serviceBody,
+      });
+    }
+  }
+
+  return bodies;
+}
+
+function hasFieldTokenEvidence(text, field) {
+  if (!text || !field) return false;
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const camel = field.replace(/_([a-zA-Z0-9])/g, (_, c) => c.toUpperCase());
+  const variants = uniq([field, camel]);
+  return variants.some(name => {
+    const e = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${e}\\b`).test(text) ||
+      new RegExp(`\\.\\s*(?:get|set)${e[0] ? e[0].toUpperCase() + e.slice(1) : e}\\s*\\(`).test(text) ||
+      new RegExp(`["']${e}["']`).test(text);
+  });
+}
+
+function checkWriteFieldConsumption(projectRoot, specContent) {
+  const coverageRows = extractApiCoverageMatrix(specContent);
+  const fieldRows = extractApiFieldChecklist(specContent);
+  const fieldById = new Map(fieldRows.map(row => [row.id, row]));
+  const writeRows = coverageRows.filter(row => isWriteMethod(row.method) && fieldById.has(row.id));
+
+  if (writeRows.length === 0) {
+    return { pass: true, checked: 0, message: 'spec 中无带字段清单的写接口' };
+  }
+
+  const backendApis = extractBackendApiContracts(projectRoot);
+  const risks = [];
+  const checked = [];
+  let skipped = 0;
+
+  for (const row of writeRows) {
+    const fields = uniq([...(fieldById.get(row.id).requiredFields || []), ...(fieldById.get(row.id).optionalFields || [])]);
+    if (fields.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    const backendCall = resolveBackendCoverageCall(projectRoot, row, backendApis);
+    if (!backendCall) {
+      skipped++;
+      continue;
+    }
+
+    const serviceBodies = collectDirectServiceBodies(projectRoot, backendCall);
+    const evidenceText = [
+      backendCall.body || '',
+      ...serviceBodies.map(item => item.body || ''),
+    ].join('\n');
+    const missingFields = fields.filter(field => !hasFieldTokenEvidence(evidenceText, field));
+    checked.push({ id: row.id, method: row.method, path: row.path, fields });
+
+    if (missingFields.length > 0) {
+      risks.push({
+        id: row.id,
+        method: row.method,
+        path: row.path,
+        backendEntry: row.backendEntry,
+        file: backendCall.file,
+        fnName: backendCall.fnName,
+        missingFields,
+        reason: `字段清单声明了 [${missingFields.join(', ')}]，但后端入口或直接 Service 方法中未发现字段消费证据`,
+      });
+    }
+  }
+
+  return {
+    pass: risks.length === 0,
+    checked: checked.length,
+    total: writeRows.length,
+    matched: checked.length - risks.length,
+    risks,
+    skipped,
+  };
+}
+
 function checkWritePersistenceClosure(projectRoot, specContent) {
   const coverageRows = extractApiCoverageMatrix(specContent);
   const writeRows = coverageRows.filter(row => isWriteMethod(row.method));
@@ -1274,7 +1373,19 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '写接口持久化闭环', pass: true, error: e.message });
   }
 
-  // 4. 错误处理审计
+  // 4. 写接口字段消费
+  try {
+    const fieldConsumption = checkWriteFieldConsumption(projectRoot, specContent);
+    checks.push({
+      name: '写接口字段消费',
+      ...fieldConsumption,
+    });
+    if (!fieldConsumption.pass) overallPass = false;
+  } catch (e) {
+    checks.push({ name: '写接口字段消费', pass: true, error: e.message });
+  }
+
+  // 5. 错误处理审计
   try {
     const errorHandling = checkErrorHandling(projectRoot);
     checks.push({
@@ -1291,7 +1402,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '错误处理审计', pass: true, error: e.message });
   }
 
-  // 5. 硬编码数据检测
+  // 6. 硬编码数据检测
   try {
     const hardcoded = checkHardcodedData(projectRoot);
     checks.push({
@@ -1303,7 +1414,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '硬编码数据检测', pass: true, error: e.message });
   }
 
-  // 6. 硬编码业务身份检测
+  // 7. 硬编码业务身份检测
   try {
     const identities = checkHardcodedIdentities(projectRoot);
     checks.push({
@@ -1315,7 +1426,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '硬编码业务身份检测', pass: true, error: e.message });
   }
 
-  // 7. 路由完整性
+  // 8. 路由完整性
   try {
     const routes = checkRouteCompleteness(projectRoot, specContent);
     checks.push({
@@ -1327,7 +1438,7 @@ function runReviewChecks(projectRoot, specContent) {
     checks.push({ name: '路由完整性', pass: true, error: e.message });
   }
 
-  // 8. 业务规则覆盖
+  // 9. 业务规则覆盖
   try {
     const rules = checkRuleCoverage(projectRoot, specContent);
     checks.push({
@@ -1347,6 +1458,7 @@ module.exports = {
   checkApiContract,
   checkContractConsistency,
   checkWritePersistenceClosure,
+  checkWriteFieldConsumption,
   checkErrorHandling,
   checkHardcodedData,
   checkHardcodedIdentities,

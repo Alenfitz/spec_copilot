@@ -45,8 +45,10 @@ test('adapters: cursor / windsurf 有 legacyPath（v3.1.0+）', () => {
   assert.strictEqual(adapters.windsurf.legacyPath, '.windsurfrules');
 });
 
-test('adapters: opencode / claude-code 支持 sub-agent', () => {
+test('adapters: opencode / claude-code 支持 sub-agent profile', () => {
   assert.strictEqual(adapters.opencode.supportsSubagent, true);
+  assert.strictEqual(adapters.opencode.agentsDir, '.opencode/agents');
+  assert.strictEqual(adapters.opencode.legacyAgentsDir, '.opencode/agent');
   assert.strictEqual(adapters['claude-code'].supportsSubagent, true);
 });
 
@@ -238,6 +240,22 @@ test('formatPrompt: opencode adapter 原样返回（无修改）', () => {
   const input = '# 主提示词\n内容';
   const output = adapters.opencode.formatPrompt(input);
   assert.strictEqual(output, input);
+});
+
+test('formatAgent: opencode 使用 .opencode/agents + permission frontmatter', () => {
+  const input = `---
+name: reviewer
+role: 审查者
+tools: read, grep, bash
+---
+# Body`;
+  const meta = parseAgentMeta(input);
+  const output = adapters.opencode.formatAgent(input, meta);
+  assert.ok(output.includes('mode: subagent'));
+  assert.ok(output.includes('permission:'));
+  assert.ok(output.includes('  read: allow'));
+  assert.ok(output.includes('  edit: deny'));
+  assert.ok(!/^tools:\s*$/m.test(output));
 });
 
 test('formatLegacy: cursor → 含命令路由', () => {

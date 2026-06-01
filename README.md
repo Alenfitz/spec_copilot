@@ -12,7 +12,7 @@
 
 | Tool | Prompt File | Commands |
 |------|-----------|----------|
-| **opencode** | `AGENTS.md` | `.opencode/commands/` (native) |
+| **opencode** | `AGENTS.md` | `.opencode/commands/` (native), `.opencode/agents/` |
 | **Claude Code** | `CLAUDE.md` | `.claude/commands/` (native) |
 | **Cursor** | `.cursor/rules/spec-copilot.mdc` + `.cursorrules` (legacy) | Prompt routing |
 | **Windsurf** | `.windsurf/rules/spec-copilot.md` + `.windsurfrules` (legacy) | Prompt routing |
@@ -91,7 +91,7 @@ your-project/
 ├── <tool-specific prompt file>        ← AI reads this
 ├── <tool-specific commands/>          ← Native commands (if supported)
 └── spec_copilot/
-    ├── commands/                      ← 13 command definitions
+    ├── commands/                      ← 14 command definitions
     ├── rules/
     │   ├── coding-style.md            ← Universal coding standards
     │   ├── security.md                ← Security red lines

@@ -11,6 +11,7 @@
  *   npx @alenfitz/spec-copilot gate <name> <phase>        阶段门禁检查
  *   npx @alenfitz/spec-copilot lint [name]                Spec 完整性检查
  *   npx @alenfitz/spec-copilot doctor                     检查安装状态
+ *   npx @alenfitz/spec-copilot agents verify              快速验证 sub-agent 安装态
  *   npx @alenfitz/spec-copilot uninstall [--confirm]      移除框架文件
  *
  * 零外部依赖，仅使用 Node.js 内置模块。
@@ -1717,6 +1718,19 @@ async function cmdGate(args) {
             }
           }
 
+          if (check.name === '写接口字段消费') {
+            if (check.message) {
+              skip(`${check.name}：${check.message}`, 'WRITE_FIELD_CONSUMPTION');
+            } else if (check.pass) {
+              passOk(`写接口字段消费：${check.matched}/${check.total} 个写接口字段有后端消费证据`, 'WRITE_FIELD_CONSUMPTION');
+            } else {
+              const msgs = check.risks.slice(0, 10).map(item =>
+                `${item.id || item.method} ${item.method} ${item.path} (${item.backendEntry || item.file}): 缺少字段消费 [${item.missingFields.join(', ')}]`
+              );
+              fail(`写接口字段消费失败（${check.matched}/${check.total} 完整，${check.skipped || 0} 个未解析后端入口）：\n   ${msgs.join('\n   ')}`, 'WRITE_FIELD_CONSUMPTION');
+            }
+          }
+
           if (check.name === '错误处理审计') {
             if (check.totalApiCalls === 0) {
               skip('错误处理审计：未检测到前端 API 调用', 'ERROR_HANDLING');
@@ -2185,6 +2199,39 @@ function cmdAgents(args) {
     return;
   }
 
+  if (sub === 'verify') {
+    const expectedNames = listFrameworkAgentNames();
+    if (expectedNames.length === 0) {
+      log.err('框架内置 agent profile 为空');
+      process.exit(1);
+    }
+
+    let targetAdapters = resolveAdapters(args.slice(1), projectRoot);
+    if (!targetAdapters) {
+      const savedTools = parseToolState(projectRoot);
+      targetAdapters = savedTools.map(name => adapters[name]).filter(Boolean);
+    }
+    if (!targetAdapters || targetAdapters.length === 0) {
+      const adapter = resolveAdapter(args.slice(1), projectRoot);
+      if (adapter) targetAdapters = [adapter];
+    }
+    if (!targetAdapters || targetAdapters.length === 0) {
+      log.err('无法确定宿主工具，请用 --tool 指定，例如：npx @alenfitz/spec-copilot agents verify --tool opencode');
+      process.exit(1);
+    }
+
+    let issues = 0;
+    for (const adapter of targetAdapters) {
+      issues += verifyAgentsForAdapter(adapter, projectRoot, expectedNames);
+    }
+    if (issues > 0) {
+      log.err(`agent verify 失败：${issues} 个问题`);
+      process.exit(1);
+    }
+    log.ok('agent verify 通过。下一步可在宿主中执行 /spec:agent-check 做真实调用探针');
+    return;
+  }
+
   if (!fs.existsSync(agentsDir)) {
     log.warn('spec_copilot/agents/ 目录不存在 — 请运行 update 拉取 v2.0.0 内置 agent');
     log.info('运行：npx @alenfitz/spec-copilot update --force');
@@ -2213,6 +2260,7 @@ agents 子命令：
   list                查看内置 Agent Profile
   show <name>         查看完整 profile 内容
   install [--tool X]  单独刷新宿主的 sub-agent 文件（不动其它文件）
+  verify [--tool X]   快速检查宿主 sub-agent 安装目录和 frontmatter
 `);
   } else if (sub === 'show') {
     const name = args[1];
@@ -2248,6 +2296,15 @@ function detectSubagentSupport(projectRoot) {
   };
 }
 
+function parseToolState(projectRoot) {
+  const stateFile = path.join(projectRoot, 'spec_copilot', TOOL_STATE_FILE);
+  if (!fs.existsSync(stateFile)) return [];
+  return fs.readFileSync(stateFile, 'utf-8')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 /** 列出 framework/agents/ 内本框架自带的 profile 文件名（不含扩展名，不含 README） */
 function listFrameworkAgentNames() {
   const srcAgentsDir = path.join(pkgRoot(), 'framework', 'agents');
@@ -2270,6 +2327,14 @@ function installAgentsForAdapter(adapter, srcRoot, projectRoot) {
   const destDir = path.join(projectRoot, adapter.agentsDir);
   fs.mkdirSync(destDir, { recursive: true });
 
+  if (adapter.legacyAgentsDir) {
+    const legacyDir = path.join(projectRoot, adapter.legacyAgentsDir);
+    if (fs.existsSync(legacyDir) && path.resolve(legacyDir) !== path.resolve(destDir)) {
+      log.warn(`${adapter.legacyAgentsDir}/ 是旧版 agent 目录；当前使用 ${adapter.agentsDir}/`);
+      log.info(`  如仍看到 General Task，请删除旧目录后重跑 agents install --tool ${adapter.name}`);
+    }
+  }
+
   const profiles = fs.readdirSync(srcAgentsDir).filter(f => f.endsWith('.md') && f !== 'README.md');
   let installed = 0;
   for (const f of profiles) {
@@ -2283,6 +2348,72 @@ function installAgentsForAdapter(adapter, srcRoot, projectRoot) {
   if (installed > 0) {
     log.ok(`${adapter.agentsDir}/ 已安装（${installed} 个 sub-agent profile，宿主可直接调用）`);
   }
+}
+
+function verifyAgentsForAdapter(adapter, projectRoot, expectedNames) {
+  let issues = 0;
+  log.title(`Agent verify → ${adapter.displayName}`);
+
+  if (!adapter.agentsDir || typeof adapter.formatAgent !== 'function') {
+    log.warn(`${adapter.displayName} 未声明可安装 sub-agent profile`);
+    return 0;
+  }
+
+  const agentsDir = path.join(projectRoot, adapter.agentsDir);
+  if (!fs.existsSync(agentsDir)) {
+    log.err(`${adapter.agentsDir}/ 不存在`);
+    issues++;
+  } else {
+    log.ok(`${adapter.agentsDir}/ 存在`);
+  }
+
+  if (adapter.legacyAgentsDir) {
+    const legacyDir = path.join(projectRoot, adapter.legacyAgentsDir);
+    if (fs.existsSync(legacyDir)) {
+      log.err(`发现旧版目录 ${adapter.legacyAgentsDir}/，opencode 当前应使用 ${adapter.agentsDir}/`);
+      issues++;
+    }
+  }
+
+  if (!fs.existsSync(agentsDir)) return issues;
+
+  for (const name of expectedNames) {
+    const file = path.join(agentsDir, `${name}.md`);
+    if (!fs.existsSync(file)) {
+      log.err(`缺少 agent: ${adapter.agentsDir}/${name}.md`);
+      issues++;
+      continue;
+    }
+    const content = fs.readFileSync(file, 'utf-8');
+    let ok = true;
+    if (adapter.name === 'opencode') {
+      if (!/^mode:\s*subagent$/m.test(content)) {
+        log.err(`${name}: 缺少 mode: subagent`);
+        ok = false;
+      }
+      if (!/^permission:\s*$/m.test(content)) {
+        log.err(`${name}: 缺少 permission 配置（不要使用旧 tools 配置）`);
+        ok = false;
+      }
+      if (/^tools:\s*$/m.test(content)) {
+        log.err(`${name}: 仍使用旧 tools 配置`);
+        ok = false;
+      }
+    } else if (adapter.name === 'claude-code') {
+      if (!new RegExp(`^name:\\s*${name}\\s*$`, 'm').test(content)) {
+        log.err(`${name}: 缺少 Claude Code name frontmatter`);
+        ok = false;
+      }
+      if (!/^tools:\s*/m.test(content)) {
+        log.err(`${name}: 缺少 Claude Code tools frontmatter`);
+        ok = false;
+      }
+    }
+    if (ok) log.ok(`${name}: profile 格式正确`);
+    else issues++;
+  }
+
+  return issues;
 }
 
 // ─── Guard ──────────────────────────────────────────────────
@@ -2422,8 +2553,7 @@ function cmdDoctor() {
     if (adapter.hasNativeCommands && adapter.commandsDir) {
       const cmdDir = path.join(projectRoot, adapter.commandsDir);
       if (fs.existsSync(cmdDir)) {
-        const cmdFiles = fs.readdirSync(cmdDir).filter(f => f.endsWith('.md'));
-        log.ok(`${adapter.commandsDir}/ 已安装（${cmdFiles.length} 个命令）`);
+        log.ok(`${adapter.commandsDir}/ 已安装（${countMdFiles(cmdDir)} 个命令）`);
       } else {
         log.err(`${adapter.commandsDir}/ 不存在`);
         issues++;
@@ -2434,8 +2564,7 @@ function cmdDoctor() {
   // 检查命令文件
   const cmdDir = path.join(scDir, 'commands');
   if (fs.existsSync(cmdDir)) {
-    const cmdFiles = fs.readdirSync(cmdDir).filter(f => f.endsWith('.md'));
-    log.ok(`spec_copilot/commands/ 已安装（${cmdFiles.length} 个命令）`);
+    log.ok(`spec_copilot/commands/ 已安装（${countMdFiles(cmdDir)} 个命令）`);
   } else {
     log.err('spec_copilot/commands/ 不存在');
     issues++;
@@ -2488,12 +2617,21 @@ function cmdDoctor() {
     log.ok(`内置 Agent Profiles：${profiles.length} 个（${profiles.map(f => f.replace('.md', '')).join(', ')}）`);
 
     // 检测宿主是否支持 sub-agent
-    const { tool, supportsSubagent } = detectSubagentSupport(projectRoot);
+    const { tool, supportsSubagent, agentsDir: hostAgentsDir } = detectSubagentSupport(projectRoot);
     if (supportsSubagent) {
-      log.ok(`宿主 ${tool} 支持 sub-agent，agent 可独立运行`);
+      log.ok(`宿主 ${tool} 支持 sub-agent profile（${hostAgentsDir}）`);
     } else {
       log.warn(`宿主 ${tool} 未知/不支持 sub-agent，agent 将以"扮演"模式运行（结论可靠性降级）`);
       log.info('  建议在 claude-code 中执行 /spec:review 以获得独立 agent 判定');
+    }
+
+    if (adapter && adapter.agentsDir) {
+      const expectedNames = listFrameworkAgentNames();
+      const verifyIssues = verifyAgentsForAdapter(adapter, projectRoot, expectedNames);
+      issues += verifyIssues;
+      if (verifyIssues === 0) {
+        log.info('  可运行 /spec:agent-check 做真实调用探针');
+      }
     }
   } else {
     log.warn('spec_copilot/agents/ 不存在 — 运行 update --force 拉取 v2.0.0 内置 agent');
@@ -2934,7 +3072,7 @@ function showHelp() {
   npx @alenfitz/spec-copilot sync [--tool <name>] [--force]  同步适配器文件
   npx @alenfitz/spec-copilot gate <name> <phase>         阶段门禁检查
   npx @alenfitz/spec-copilot lint [name]                 Spec 完整性检查
-  npx @alenfitz/spec-copilot agents <list|show|install>  内置 Agent Profile 管理
+  npx @alenfitz/spec-copilot agents <list|show|install|verify>  内置 Agent Profile 管理
   npx @alenfitz/spec-copilot scorecard <msg-file>        校验 task commit 自评分卡
   npx @alenfitz/spec-copilot guard <install|status|lock|unlock|check>  代码级护栏
   npx @alenfitz/spec-copilot ci <setup>                  生成 CI/CD 配置
