@@ -416,6 +416,19 @@ function cmdInstall(args) {
   // 8. Git hook
   installGitHook(projectRoot);
 
+  // 9. Guard 默认上膛（v4.0.27）：让 spec 防篡改保护"默认生效"，而非依赖用户手动 guard install
+  try {
+    const guard = require('./guard');
+    if (!guard.isInstalled(projectRoot)) {
+      log.info('');
+      guard.cmdGuardInstall(projectRoot);
+    } else {
+      log.info('Guard 护栏已安装，跳过');
+    }
+  } catch (e) {
+    log.warn(`Guard 自动安装跳过（${e.message}）— 可手动运行 guard install`);
+  }
+
   log.title('安装完成');
   log.info('');
   log.info('接下来：');
@@ -572,25 +585,38 @@ async function cmdGate(args) {
   log.title(`Gate 检查: ${changeName} → ${phase}`);
 
   // ── guard 硬拦截：hash 校验 ──
-  // 如果被保护文件被修改，gate 直接失败，不再执行后续检查
+  // 如果被保护文件被修改，gate 直接失败，不再执行后续检查。
+  // 关键：未安装 ≠ 通过。未安装时 spec 防篡改保护根本不生效，必须强警告而非静默放行。
   try {
     const guard = require('./guard');
-    const integrity = guard.onGateCheck(projectRoot);
-    if (!integrity.pass) {
+    if (!guard.isInstalled(projectRoot)) {
       console.log('');
-      console.log('🛑 spec-copilot guard 拦截 — 被保护文件完整性校验失败');
-      console.log('─'.repeat(50));
-      for (const v of integrity.violations) {
-        console.log(`  ❌ ${v.file}`);
-        console.log(`     ${v.reason}`);
-        console.log(`     期望 hash: ${v.expected}  实际: ${v.actual}`);
+      log.warn('Guard 护栏未安装 — spec.md / domain-rules.md 的防篡改保护当前【未生效】');
+      log.warn('  当前 gate 无法检测"模型改写 spec 来压低过审门槛"（参见 test05 复盘）');
+      log.info('  一键启用：npx @alenfitz/spec-copilot guard install');
+      log.info('  新装项目已默认启用；此提示针对旧项目升级场景');
+      console.log('');
+    } else {
+      const integrity = guard.onGateCheck(projectRoot);
+      if (!integrity.pass) {
         console.log('');
+        console.log('🛑 spec-copilot guard 拦截 — 被保护文件完整性校验失败');
+        console.log('─'.repeat(50));
+        for (const v of integrity.violations) {
+          console.log(`  ❌ ${v.file}`);
+          console.log(`     ${v.reason}`);
+          console.log(`     期望 hash: ${v.expected}  实际: ${v.actual}`);
+          console.log('');
+        }
+        console.log('💡 如需合法修改，人类先运行: spec-copilot guard unlock <文件>');
+        console.log('');
+        process.exit(1);
       }
-      console.log('💡 如需合法修改，人类先运行: spec-copilot guard unlock <文件>');
-      console.log('');
-      process.exit(1);
     }
-  } catch { /* guard 未安装时静默跳过 */ }
+  } catch (e) {
+    // 仅 guard 模块自身异常才放过（不因此阻断 gate）；不再把"未安装"也吞掉
+    if (process.env.SPEC_COPILOT_DEBUG) log.warn(`guard 检查异常（已跳过）: ${e.message}`);
+  }
 
   let pass = true;
   const failReasons = [];  // v2.9.0: 收集所有失败原因用于客观评分（regex 兜底）
@@ -2679,7 +2705,9 @@ function cmdDoctor() {
         log.warn(`Guard 护栏已启用（${lockedCount} 个文件锁定，${integrity.violations.length} 个完整性异常）`);
       }
     } else {
-      log.info('Guard 护栏未安装（运行 spec-copilot guard install 启用代码级保护）');
+      log.warn('Guard 护栏未安装 — spec 防篡改保护未生效，gate 无法拦截"改 spec 压低过审"');
+      log.info('  启用：npx @alenfitz/spec-copilot guard install（新装项目已默认启用）');
+      issues++;
     }
   } catch {
     log.info('Guard 检查跳过');
@@ -2690,6 +2718,7 @@ function cmdDoctor() {
     log.ok('全部检查通过');
   } else {
     log.err(`发现 ${issues} 个问题，运行 install 修复`);
+    process.exitCode = 1;
   }
 }
 

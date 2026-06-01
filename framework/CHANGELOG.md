@@ -2,6 +2,95 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.27] - 2026-06-01
+
+### Guard 默认上膛（Tool Orchestration — 让已有机制生效）
+
+test05 复盘暴露的结构性问题：Guard / Contract Freeze 代码早已写好，但**默认不生效**——`install` 不自动安装 guard，gate 在 guard 未安装时把 hash 校验异常 `catch{}` 静默吞掉，等于"被检查物可被模型无痕改写"。这使得"改 spec 压低过审门槛"这类行为无法被拦截。
+
+本版本不新增任何检查项，只把已有的防篡改机制接通成默认生效。
+
+#### 变更
+
+- `install` 流程末尾默认执行 `guard install`，新装项目的 spec 防篡改保护**默认生效**
+- `gate` 区分两种状态，不再静默放行：
+  - **未安装** → 强警告"防篡改保护未生效" + 一键启用提示（不阻断，兼容旧项目升级）
+  - **已安装且 hash 不符** → 拦截（非零退出）
+- 原 `catch { /* guard 未安装时静默跳过 */ }` 改为只吞 guard 模块自身异常（`SPEC_COPILOT_DEBUG` 可见）
+- `doctor` 把"guard 未安装"从提示升级为 issue，并以非零退出码反映问题数
+- `guard.js` 新增并导出 `isInstalled()`
+- 新增回归测试 `test/guard-arming.test.js`（4 例）：默认上膛 / 篡改拦截 / 未安装强警告 / doctor 计 issue
+
+#### 边界
+
+- 这是"让问题更难发生"而非"更易暴露"：默认配置下篡改 spec 会被 gate 直接拦截
+- 仍不阻止 AI 修改文件本身——guard 的机制是"改了过不了 gate"，而非禁止写入
+- 哨兵文件（`.gate-*-passed`）是否可伪造留待 v4.0.28 处理
+
+## [4.0.26] - 2026-05-29
+
+### OpenCode Agent Invocation Probe（Tool Orchestration）
+
+本版本修复 test05 实验暴露的 OpenCode 子 agent 适配问题：旧版安装到了 `.opencode/agent/`，而当前 OpenCode 项目级 agent 应位于 `.opencode/agents/`。这会导致 `/spec:review` 看似调用审查 agent，实际降级成 `General Task`。
+
+#### 变更
+
+- OpenCode agent 安装目录改为 `.opencode/agents/`
+- OpenCode agent frontmatter 改为 `mode: subagent` + `permission:`
+- 新增 `/spec:agent-check` 快速运行时探针
+- 新增 `npx @alenfitz/spec-copilot agents verify`，可在安装后立即验证目录和 frontmatter
+- `doctor` 增加宿主 agent profile 校验，并提示运行 `/spec:agent-check`
+- `/spec:review` 明确要求 OpenCode 命中指定 subagent；如果显示 `General Task`，必须停止
+
+#### 边界
+
+- `agents verify` 只证明安装形态正确，不证明宿主运行时真的调起 subagent
+- `/spec:agent-check` 是运行时快速探针，用于在正式 review 前几十秒内确认是否真实命中 `spec-compliance-reviewer`
+
+## [4.0.25] - 2026-05-28
+
+### Write Field Consumption（Entropy Control v4）
+
+本版本不声称已经证明“字段语义完全正确”。它先补一个更窄的真实缺口：spec 已经声明写接口字段，但后端只是把整个 `request` 对象传来传去，未消费 `title` / `description` 等字段。
+
+#### review gate 新增写接口字段消费检查
+
+- 读取 §6.2 接口字段清单中的写接口字段
+- 只检查 `POST` / `PUT` / `PATCH` / `DELETE`
+- 解析后端实现入口，例如 `TicketController#save`
+- 检查 controller 方法体和直接调用的 service 方法体是否出现字段证据
+- 没有字段清单时跳过，不误伤未结构化声明字段的项目
+- 未发现字段消费证据时，`gate review` 失败并输出 `写接口字段消费失败`
+
+效果：把“接口和落库调用都有了，但声明的入参字段根本没被使用”的假闭环前移到 review gate。
+
+#### 测试
+
+扩展：
+
+- `test/review-checks.test.js`
+
+覆盖：
+
+- 字段清单声明 `title` / `description`，但后端未消费时失败
+- service 中通过 `request.get("title")` / `request.get("description")` 消费字段时通过
+- 空写入字段清单跳过，不误伤
+- `snake_case` 字段可通过 camelCase getter 或字符串 key 形成消费证据
+
+验证结果：
+
+- `node --test test/review-checks.test.js`：19 / 19 通过
+- `npm test`：110 / 110 通过
+- `npm run build`：通过
+
+#### 边界
+
+- 这是字段证据检测，不是完整语义校验
+- 不能证明字段值已正确校验、转换、落到正确列或正确回显
+- 当前只追踪 Java/Spring controller 到直接 service 调用的一跳
+- DTO getter/setter 与 Map key 使用可作为文本证据，更深层 dataflow 留给后续版本
+- 当前 milestone 的 Entropy Control 补强到此为止；下一版本应转向 Tool Orchestration
+
 ## [4.0.24] - 2026-05-28
 
 ### Write Persistence Closure（Entropy Control v3）
