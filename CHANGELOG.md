@@ -4,6 +4,18 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.31] - 2026-06-02
+
+### E2E smoke false-failure fixes (gate credibility)
+
+Real-project runs surfaced three false positives in smoke/review that polluted results and hurt gate credibility:
+
+- **API paths treated as browser pages**: `extractSpecRoutes` pulled §6.1 API matrix paths (e.g. `POST /api/work-ticket/list`) into page routes and `page.goto`'d them, so POST endpoints got hit via GET → false 405. Fix: matrix API paths now go only to API probing (with their declared method); added column-based extraction for `| APIxx | METHOD | /path |`.
+- **Source modules treated as API responses**: E2E used `url.includes('/api/')`, misclassifying Vite source modules like `/src/api/x.ts` as API calls → false "non-JSON" failure. Fix: added `isApiRequest`, matching pathname starting with `/api/` and excluding source/asset extensions.
+- **Untyped Map param treated as a field**: contract consistency used the `@RequestBody Map<String,Object> request` param name `request` as a required field → false "frontend missing [request]". Fix: only `@PathVariable`/`@RequestParam` names count as fields; `@RequestBody` param names do not.
+
+Effect: projects with POST/PUT/DELETE APIs no longer get false 405 E2E failures; frontends with a `src/api/` dir no longer get false non-JSON failures; untyped Map bodies no longer trigger false contract mismatches. Added `test/e2e-smoke-routes.test.js`; 128 tests pass.
+
 ## [4.0.30] - 2026-06-01
 
 ### Gate Failure Circuit Breaker

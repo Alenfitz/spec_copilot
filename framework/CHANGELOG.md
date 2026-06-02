@@ -2,6 +2,23 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.31] - 2026-06-02
+
+### E2E smoke 假失败修复(提升 gate 可信度)
+
+真实项目实跑暴露 smoke/review 的三类误报,会污染结论、损害 gate 可信度:
+
+- **API 路径被当成浏览器页面**:`extractSpecRoutes` 把 §6.1 接口覆盖矩阵里的 Path(如 `POST /api/work-ticket/list`)当成页面路由去 `page.goto`,POST 接口被 GET 访问 → 假 405。修复:矩阵 API 路径只走 API 探测(按声明 method),不再当页面;新增按 `| APIxx | METHOD | /path |` 列提取 API。
+- **源码模块被当成 API 响应**:E2E 用 `url.includes('/api/')` 判定 API 请求,把 Vite 源码模块 `/src/api/x.ts` 误判为 API → "非 JSON"假失败。修复:新增 `isApiRequest`,按 pathname 以 `/api/` 开头且非源码/资源扩展名判定。
+- **无类型 Map 入参被当字段**:契约一致性检查把 `@RequestBody Map<String,Object> request` 的参数名 `request` 当成必填字段 → 报"前端缺少 [request]"。修复:仅 `@PathVariable`/`@RequestParam` 参数名计入字段,`@RequestBody` 参数名不计。
+
+#### 效果
+
+- 含 POST/PUT/DELETE API 的项目不再产生假 405/4xx E2E 失败
+- 带 `src/api/` 目录的前端不再产生"非 JSON"假失败
+- 后端用无类型 Map 接收 body 时不再误报契约不一致
+- 新增 `test/e2e-smoke-routes.test.js` 锁定路由/API 分离;全套 128 测试通过
+
 ## [4.0.30] - 2026-06-01
 
 ### Gate 失败止损计数器（Constraints + Feedback Loops）

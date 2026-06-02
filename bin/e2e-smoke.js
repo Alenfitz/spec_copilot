@@ -825,36 +825,67 @@ function compareScreenshots(currentPath, projectRoot) {
 /**
  * 从 spec.md 提取可测试的页面路由和 API 端点
  */
+// 判定一个 URL 是否是真实后端 API 调用。
+// 不能用朴素的子串包含判断 —— 那会把 Vite 源码模块(如 /src/api/workTicket.ts)
+// 误判为 API 请求,导致"非 JSON"假失败。真实 API 的 pathname 以 /api/ 开头,且不是源码/资源文件。
+function isApiRequest(url) {
+  let pathname;
+  try { pathname = new URL(url).pathname; } catch { pathname = String(url || ''); }
+  // 真实后端 API:pathname 以 /api/ 开头(Vite 源码模块如 /src/api/x.ts 不会以 /api/ 开头)
+  if (!pathname.startsWith('/api/')) return false;
+  // 双保险:排除带源码/资源扩展名的路径
+  if (/\.(ts|tsx|js|jsx|mjs|cjs|vue|css|scss|less|map|png|jpg|svg|ico|woff2?)$/i.test(pathname)) return false;
+  return true;
+}
+
 function extractSpecRoutes(specContent) {
   const pages = [];
   const apis = [];
   const seen = new Set();
 
-  // 1. 提取 API 路径（§6 接口契约）
+  const addApi = (method, rawPath) => {
+    const apiPath = rawPath.replace(/\{[^}]+\}/g, '1').replace(/:[a-zA-Z]\w*/g, '1'); // 路径参数 → 1
+    if (!seen.has('api:' + method + ' ' + apiPath)) {
+      seen.add('api:' + method + ' ' + apiPath);
+      apis.push({ method, path: apiPath });
+    }
+  };
+
+  // 1. 提取 API 路径（§6 接口契约：形如 `POST /api/xxx`）
   const apiRegex = /(?:GET|POST|PUT|DELETE|PATCH)\s+(\/api\/[^\s|,)）]+)/g;
   let m;
   while ((m = apiRegex.exec(specContent)) !== null) {
-    const apiPath = m[1].replace(/\{[^}]+\}/g, '1'); // 替换路径参数
-    if (!seen.has(apiPath)) {
-      seen.add(apiPath);
-      apis.push({ method: m[0].split(/\s/)[0], path: apiPath });
-    }
+    addApi(m[0].split(/\s/)[0].toUpperCase(), m[1]);
   }
+
+  // 1b. 从 §6.1 接口覆盖矩阵按列提取（形如 `| API01 | POST | /api/xxx | ... |`）
+  // 这些是 API 端点，必须走 API 探测（按正确 method），绝不能当浏览器页面 goto。
+  const matrixApiRegex = /\|\s*API\d+\s*\|\s*(GET|POST|PUT|DELETE|PATCH)\s*\|\s*(\/[^\s|]+)\s*\|/gi;
+  while ((m = matrixApiRegex.exec(specContent)) !== null) {
+    addApi(m[1].toUpperCase(), m[2]);
+  }
+  // 记录所有 API 路径，供页面路由提取时排除（防止把 API 路径误当页面）
+  const apiPathSet = new Set(apis.map(a => a.path));
+
+  // 页面路由不能是 API 路径(以 /api/ 开头或已被识别为 API 端点)
+  const isApiPath = (route) => route.startsWith('/api/') || apiPathSet.has(route);
 
   // 2. 提取显式页面路由
   const routeRegex = /(?:路由|route|path|页面路径)[：:]\s*([\/\w\-:]+)/gi;
   while ((m = routeRegex.exec(specContent)) !== null) {
     const route = m[1];
+    if (isApiPath(route)) continue;
     if (!seen.has('page:' + route)) {
       seen.add('page:' + route);
       pages.push({ route, specRef: `路由声明` });
     }
   }
 
-  // 3. 从路由表格提取
+  // 3. 从路由表格提取(排除 API 路径——§6.1 矩阵的 Path 列是 API,不是页面)
   const tableRouteRegex = /\|\s*(\/[a-zA-Z][\w\-\/:]*)\s*\|/g;
   while ((m = tableRouteRegex.exec(specContent)) !== null) {
     const route = m[1].replace(/:[a-zA-Z]+/g, '1'); // :id → 1
+    if (isApiPath(route) || m[1].startsWith('/api/')) continue;
     if (!seen.has('page:' + route)) {
       seen.add('page:' + route);
       pages.push({ route, specRef: '路由表' });
@@ -1257,7 +1288,7 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
   // 监听网络请求失败
   const onRequestFailed = (req) => {
     const url = req.url();
-    if (url.includes('/api/') && !isBenignConsoleMsg(url)) {
+    if (isApiRequest(url) && !isBenignConsoleMsg(url)) {
       const failure = req.failure();
       networkFailures.push(`${req.method()} ${url}: ${failure ? failure.errorText : 'unknown'}`);
     }
@@ -1267,7 +1298,7 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
   // v2.7.0: 监听所有 API 响应（4xx + 5xx + 非 JSON 检测）
   const onResponse = async (res) => {
     const url = res.url();
-    if (!url.includes('/api/')) return;
+    if (!isApiRequest(url)) return;
 
     const status = res.status();
     const snapshot = await buildApiInteractionSnapshot(res);
@@ -1552,7 +1583,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
       // 收集 API 请求
       const apiCalls = [];
       const onSearchResponse = async (res) => {
-        if (res.url().includes('/api/')) {
+        if (isApiRequest(res.url())) {
           const snapshot = await buildApiInteractionSnapshot(res);
           apiCalls.push(snapshot);
         }
@@ -1634,7 +1665,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     if (paginationInfo.found && paginationInfo.hasNextOrPage2) {
       const apiCalls = [];
       const onPageResponse = async (res) => {
-        if (res.url().includes('/api/')) {
+        if (isApiRequest(res.url())) {
           const snapshot = await buildApiInteractionSnapshot(res);
           apiCalls.push(snapshot);
         }
@@ -1694,7 +1725,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     const beforeUrl = page.url();
     const apiCalls = [];
     const onDetailResponse = async (res) => {
-      if (res.url().includes('/api/')) {
+      if (isApiRequest(res.url())) {
         const snapshot = await buildApiInteractionSnapshot(res);
         apiCalls.push(snapshot);
       }
@@ -1889,7 +1920,7 @@ async function checkPageInteractions(page, baseUrl, routeInfo, timeoutMs) {
     if (formTestInfo.found) {
       const formApiCalls = [];
       const onFormResponse = async (res) => {
-        if (res.url().includes('/api/')) {
+        if (isApiRequest(res.url())) {
           const snapshot = await buildApiInteractionSnapshot(res);
           formApiCalls.push(snapshot);
         }
@@ -2415,7 +2446,7 @@ async function runE2ESmoke(projectRoot, specContent, options = {}) {
       const schemaViolations = [];
       const onSchemaResponse = async (res) => {
         const url = res.url();
-        if (!url.includes('/api/') || res.status() < 200 || res.status() >= 300) return;
+        if (!isApiRequest(url) || res.status() < 200 || res.status() >= 300) return;
 
         try {
           const contentType = res.headers()['content-type'] || '';

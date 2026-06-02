@@ -325,11 +325,15 @@ function extractBackendApiContracts(projectRoot) {
         const subPath = m[2];
         const fnName = m[3];
         const paramsText = m[4] || '';
-        const params = uniq(
-          [...paramsText.matchAll(/(?:@PathVariable|@RequestParam(?:\(\s*["']([^"']+)["'])?|@RequestBody)\s*(?:@Valid\s*)?(?:Map<String,\s*Object>|[A-Za-z0-9_<>, ?]+)\s+([A-Za-z0-9_$]+)/g)]
+        // 仅 @PathVariable / @RequestParam 的参数名才是真实字段(路径参数 / query 参数)。
+        // @RequestBody 的参数名(如 Map<String,Object> request 里的 "request")不是字段 ——
+        // body 的字段名无法从方法签名得知,把参数名当字段会误报"前端缺少 [request]"。
+        const namedParams = uniq(
+          [...paramsText.matchAll(/(?:@PathVariable|@RequestParam)(?:\(\s*["']([^"']+)["']\s*\))?\s*(?:@Valid\s*)?(?:Map<String,\s*Object>|[A-Za-z0-9_<>, ?]+?)\s+([A-Za-z0-9_$]+)/g)]
             .map(mm => mm[1] || mm[2])
         );
 
+        // body 中显式消费的字段(require(body,"x"))才算已知 body 字段;Map/DTO 无显式消费则未知。
         const requireCalls = uniq(
           [...content.slice(m.index, Math.min(content.length, m.index + 1500)).matchAll(/require\(body,\s*["']([^"']+)["']\)/g)]
             .map(mm => mm[1])
@@ -340,8 +344,8 @@ function extractBackendApiContracts(projectRoot) {
           fnName,
           method,
           path: `${basePath}${subPath}`.replace(/\/+/g, '/'),
-          requiredFields: requireCalls.length > 0 ? requireCalls : params,
-          rawParams: params,
+          requiredFields: uniq([...requireCalls, ...namedParams]),
+          rawParams: namedParams,
           body: extractBalancedBody(content, mappingRegex.lastIndex - 1),
         });
       }
