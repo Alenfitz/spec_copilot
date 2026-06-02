@@ -4,6 +4,23 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.34] - 2026-06-02
+
+### E2E empty-table detection: Element Plus / Ant Design false positive fixed
+
+The E2E "table has header but no data" check iterated `querySelectorAll('.el-table, .ant-table, table')`.
+Element Plus / Ant Design split header and body into separate `<table>` elements for fixed headers, so
+the header-only inner table was counted as "header but no rows" → a false "API responded but data not
+rendered" failure even when data rendered fine.
+
+Wide blast radius: nearly every real frontend using Element Plus / Ant Design tables would hit this false
+smoke failure.
+
+Fix: skip inner `<table>` elements nested in `.el-table` / `.ant-table` / `.ant-table-wrapper`; only evaluate
+the component container (via its header/body wrappers) and plain `<table>` elements.
+
+Effect: the work-ticket slice with Element Plus went from "2 pages empty-table false failure" back to 100/100. 132 tests pass.
+
 ## [4.0.33] - 2026-06-02
 
 ### Feature coverage: "phantom feature point" from range references fixed

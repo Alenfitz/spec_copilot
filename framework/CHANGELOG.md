@@ -2,6 +2,21 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.34] - 2026-06-02
+
+### E2E 空表格检测:Element Plus / Ant Design 误报修复
+
+E2E 冒烟的"表格有表头但无数据"检测用 `querySelectorAll('.el-table, .ant-table, table')` 遍历表格。
+但 Element Plus / Ant Design 为固定表头会把**表头和表体拆成各自独立的 `<table>`**;那个"只有表头的
+子表"会被当成"有表头无数据" → 即使数据已正常渲染,也报"API 有响应但数据未渲染"假失败。
+
+**影响面极广**:几乎所有用 Element Plus / Ant Design 表格的真实前端都会中招,导致 smoke 假红。
+
+修复:遍历时跳过位于 `.el-table` / `.ant-table` / `.ant-table-wrapper` 内部的子 `<table>`,只评估组件
+容器本身(经其 header/body wrapper 取行)与普通 `<table>`。
+
+效果(实测:工作票切片接入 Element Plus 后,smoke 由"2 页面空表格假失败"恢复 100/100)。全套 132 测试通过。
+
 ## [4.0.33] - 2026-06-02
 
 ### 功能点覆盖率:范围引用产生"幽灵功能点"修复

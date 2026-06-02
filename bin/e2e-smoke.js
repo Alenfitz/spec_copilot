@@ -1453,6 +1453,10 @@ async function checkPage(page, baseUrl, routeInfo, timeoutMs) {
         const tables = document.querySelectorAll('.el-table, .ant-table, table');
         let emptyTableCount = 0;
         tables.forEach(t => {
+          // Element Plus / Ant Design 为固定表头会把表头和表体拆成各自独立的 <table>。
+          // 跳过这些位于 .el-table/.ant-table 内部的子 <table>,否则"只有表头的那个表"
+          // 会被误判为"有表头无数据"。只评估组件容器本身(其 header/body wrapper)与普通 <table>。
+          if (t.tagName === 'TABLE' && t.closest('.el-table, .ant-table, .ant-table-wrapper')) return;
           const headerCells = t.querySelectorAll('th, .el-table__header-wrapper th');
           const bodyRows = t.querySelectorAll('tbody tr, .el-table__body-wrapper tbody tr');
           // 有表头但 body 为空或只有一行"暂无数据"
