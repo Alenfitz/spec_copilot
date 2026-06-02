@@ -2,6 +2,20 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.32] - 2026-06-02
+
+### review 前端严格检查:API 路径误报修复
+
+`gate review` 的前端严格检查在提取 spec §6 的 API 路径时,用 `/\/api\/.../ ` 正则会把
+§6.1 矩阵"前端调用方"列里的文件路径(如 `src/api/workTicket.ts`)中的 `/api/workTicket`
+当成声明的 API 端点,然后误报"前端 src/api/ 缺失该 API 调用"。
+
+修复:提取 API 路径时加负向先行 `(?<![A-Za-z])`,排除 `src/api/` 这类源码文件路径;
+并过滤掉带 `.ts/.js/.vue` 等扩展名的匹配。这与 v4.0.31 修的 smoke 侧 `/src/api` 误判同源。
+
+效果:§6.1 用 `src/api/xxx.ts` 标注前端调用方的项目,review 不再产生 API 缺失假报。
+(实测:工作票列表→详情切片 review 由 71/100 → 100/100)
+
 ## [4.0.31] - 2026-06-02
 
 ### E2E smoke 假失败修复(提升 gate 可信度)

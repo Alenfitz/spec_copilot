@@ -4,6 +4,21 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.32] - 2026-06-02
+
+### review frontend strict check: API path false positive fix
+
+The `gate review` frontend strict check extracted spec §6 API paths with `/\/api\/.../`, which also
+matched file paths in the §6.1 matrix "frontend caller" column (e.g. `/api/workTicket` inside
+`src/api/workTicket.ts`), then falsely reported "frontend src/api/ missing this API call".
+
+Fix: API path extraction now uses a negative lookbehind `(?<![A-Za-z])` to exclude source file
+paths like `src/api/`, and filters out matches with `.ts/.js/.vue` extensions. Same root cause as
+the v4.0.31 smoke-side `/src/api` misclassification.
+
+Effect: projects that annotate the frontend caller as `src/api/xxx.ts` in §6.1 no longer get false
+API-missing failures in review. (Validated: work-ticket list→detail slice review went 71/100 → 100/100.)
+
 ## [4.0.31] - 2026-06-02
 
 ### E2E smoke false-failure fixes (gate credibility)

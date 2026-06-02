@@ -1500,7 +1500,10 @@ async function cmdGate(args) {
           }
 
           // 4.4 API 覆盖检测（spec §6 声明的路径是否在前端 src/api/ 中出现）
-          const apiPaths = [...new Set((specContent.match(/\/api\/[a-zA-Z][\w\-\/{}]*/g) || []))];
+          // 用负向先行排除 `src/api/xxx.ts` 这类前端文件路径(§6.1 调用方列里的)——
+          // 它们不是 API 端点,否则会把文件名误当成缺失的接口路径。
+          const apiPaths = [...new Set((specContent.match(/(?<![A-Za-z])\/api\/[a-zA-Z][\w\-\/{}]*/g) || []))]
+            .filter(p => !/\.(ts|tsx|js|jsx|vue)$/.test(p));
           if (apiPaths.length > 0) {
             for (const root of feRoots) {
               const apiDir = path.join(root, 'api');
