@@ -48,6 +48,8 @@ const {
 const BUILTIN_ADAPTERS = ['_template.md', 'nextjs.md', 'react-express.md', 'spring-boot-vue3.md'];
 const TOOL_STATE_FILE = '.spec-copilot-tool'; // 记录使用的工具
 const SENTINEL_KEY_FILE = 'sentinel.key';
+const GATE_FAILURES_FILE = 'gate-failures.json';
+const GATE_FAILURE_STOP_THRESHOLD = 3;
 
 // ─── 工具函数 ───────────────────────────────────────────────
 
@@ -287,6 +289,67 @@ function verifyGateSentinel(projectRoot, changeDir, changeName, phase) {
     return { pass: false, exists: true, file: sentinelPath, reason: `${sentinelName} 签名无效，疑似伪造或复制旧哨兵` };
   }
   return { pass: true, exists: true, file: sentinelPath, data };
+}
+
+function gateFailureLedgerPath(projectRoot) {
+  return path.join(ensureLocalStateDir(projectRoot), GATE_FAILURES_FILE);
+}
+
+function readGateFailureLedger(projectRoot) {
+  const ledgerPath = path.join(projectRoot, '.spec-copilot', GATE_FAILURES_FILE);
+  if (!fs.existsSync(ledgerPath)) return { entries: {} };
+  try {
+    const data = JSON.parse(fs.readFileSync(ledgerPath, 'utf-8'));
+    return data && typeof data === 'object' && data.entries ? data : { entries: {} };
+  } catch {
+    return { entries: {} };
+  }
+}
+
+function writeGateFailureLedger(projectRoot, ledger) {
+  fs.writeFileSync(gateFailureLedgerPath(projectRoot), JSON.stringify(ledger, null, 2) + '\n', 'utf-8');
+}
+
+function summarizeFailureSignature(scoreSignals, failReasons) {
+  const failedCodes = scoreSignals
+    .filter(s => s.status === 'fail' && s.code)
+    .map(s => s.code);
+  const codes = Array.from(new Set(failedCodes));
+  if (codes.length > 0) return codes.sort().join('+');
+  const first = failReasons[0] || 'UNKNOWN';
+  return crypto.createHash('sha256').update(first).digest('hex').slice(0, 12);
+}
+
+function recordGateFailure(projectRoot, changeName, phase, scoreSignals, failReasons) {
+  const signature = summarizeFailureSignature(scoreSignals, failReasons);
+  const key = `${changeName}:${phase}:${signature}`;
+  const ledger = readGateFailureLedger(projectRoot);
+  const prev = ledger.entries[key] || {};
+  const count = (prev.count || 0) + 1;
+  ledger.entries[key] = {
+    changeName,
+    phase,
+    signature,
+    count,
+    firstSeenAt: prev.firstSeenAt || new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    sample: failReasons.slice(0, 3),
+  };
+  writeGateFailureLedger(projectRoot, ledger);
+  return ledger.entries[key];
+}
+
+function clearGateFailures(projectRoot, changeName, phase) {
+  const ledger = readGateFailureLedger(projectRoot);
+  let changed = false;
+  const prefix = `${changeName}:${phase}:`;
+  for (const key of Object.keys(ledger.entries)) {
+    if (key.startsWith(prefix)) {
+      delete ledger.entries[key];
+      changed = true;
+    }
+  }
+  if (changed) writeGateFailureLedger(projectRoot, ledger);
 }
 
 function hasExplicitIncompleteDeclaration(text) {
@@ -2227,6 +2290,7 @@ async function cmdGate(args) {
 
   console.log('');
   if (pass) {
+    clearGateFailures(projectRoot, changeName, phase);
     // 成功通过 smoke/review/test gate → 写哨兵
     if (phase === 'smoke' || phase === 'review' || (phase === 'test' && args.includes('--record-pass'))) {
       try {
@@ -2272,6 +2336,7 @@ async function cmdGate(args) {
     log.ok(`Gate 通过 ✓ — 可以进入 ${phase} 阶段`);
     process.exit(0);
   } else {
+    const failureEntry = recordGateFailure(projectRoot, changeName, phase, scoreSignals, failReasons);
     // gate 失败 → 清除可能存在的旧哨兵
     if (phase === 'smoke' || phase === 'review' || phase === 'test') {
       const sentinelName = phase === 'smoke'
@@ -2283,6 +2348,14 @@ async function cmdGate(args) {
       if (fs.existsSync(sentinelPath)) {
         try { fs.unlinkSync(sentinelPath); } catch {}
       }
+    }
+    if (failureEntry.count >= GATE_FAILURE_STOP_THRESHOLD) {
+      console.log('');
+      log.err(`Gate 连续失败止损：${changeName} / ${phase} / ${failureEntry.signature} 已连续失败 ${failureEntry.count} 次`);
+      log.warn('不要继续盲目修补或改写 spec/tasks 来凑过审。请暂停并向用户汇报。');
+      log.info('建议选项：1. 用户指导修复方向  2. 明确接受降级并记录决策  3. 终止本次变更');
+    } else if (failureEntry.count === GATE_FAILURE_STOP_THRESHOLD - 1) {
+      log.warn(`Gate 相同失败已出现 ${failureEntry.count} 次；下次仍失败将触发止损提示`);
     }
     log.err(`Gate 未通过 ✗ — 无法进入 ${phase} 阶段`);
     process.exit(1);

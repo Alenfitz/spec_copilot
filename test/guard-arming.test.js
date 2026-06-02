@@ -45,6 +45,16 @@ function writeMinimalChange(dir, name, status) {
   return changeDir;
 }
 
+function writeBlockedApplyChange(dir, name) {
+  const changeDir = path.join(dir, 'spec_copilot', 'changes', name);
+  fs.mkdirSync(changeDir, { recursive: true });
+  fs.writeFileSync(path.join(changeDir, 'spec.md'),
+    `status: propose\n# Spec\n## 9. 待澄清\n- [ ] 仍需用户确认\n## 10. 技术决策\n（无）\n`);
+  fs.writeFileSync(path.join(changeDir, 'tasks.md'), '# tasks\n');
+  fs.writeFileSync(path.join(changeDir, 'log.md'), '# log\n');
+  return changeDir;
+}
+
 test('install 默认上膛：自动生成 .spec-copilot/guard.json', () => {
   const dir = mkTmp();
   try {
@@ -192,6 +202,29 @@ test('doctor 把"guard 未安装"计为 issue', () => {
     const { code, out } = runIn(dir, ['doctor']);
     assert.match(out, /Guard 护栏未安装/, 'doctor 应报告 guard 未安装');
     assert.notStrictEqual(code, 0, 'guard 未安装时 doctor 应非零退出（计为 issue）');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('gate 连续同类失败 3 次后触发止损提示', () => {
+  const dir = mkTmp();
+  try {
+    runIn(dir, ['install', '--tool', 'claude-code']);
+    writeBlockedApplyChange(dir, 'demo');
+
+    const first = runIn(dir, ['gate', 'demo', 'apply']);
+    assert.notStrictEqual(first.code, 0);
+    assert.doesNotMatch(first.out, /连续失败止损/);
+
+    const second = runIn(dir, ['gate', 'demo', 'apply']);
+    assert.notStrictEqual(second.code, 0);
+    assert.match(second.out, /下次仍失败将触发止损提示/);
+
+    const third = runIn(dir, ['gate', 'demo', 'apply']);
+    assert.notStrictEqual(third.code, 0);
+    assert.match(third.out, /Gate 连续失败止损/);
+    assert.match(third.out, /暂停并向用户汇报/);
   } finally {
     cleanup(dir);
   }

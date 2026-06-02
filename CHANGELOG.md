@@ -4,6 +4,37 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.30] - 2026-06-01
+
+### Gate Failure Circuit Breaker
+
+Main dimension: Constraints + Feedback Loops.
+
+test05 showed a costly pattern: after a gate failure, the model kept trying small edits and documentation rewrites for many commits instead of stopping to ask for direction. This release adds a local failure ledger so repeated identical gate failures become visible early.
+
+Changes:
+
+- Gate failures are recorded in `.spec-copilot/gate-failures.json`, keyed by `changeName + phase + failure signature`.
+- The signature uses structured failure codes when available, and falls back to a hash of the first failure reason.
+- On the second identical failure, gate warns that the next one will trigger the stop-loss prompt.
+- From the third identical failure onward, gate prints a clear stop-loss message: pause, report to the user, and choose whether to guide repair, accept a documented degradation, or terminate the change.
+- A passing gate clears the failure counters for that change/phase.
+
+Boundary:
+
+- This is a circuit breaker prompt, not an OS-level lock. It does not prevent another command from being run, but it makes continued blind retries explicit and auditable.
+- It is intentionally local state, not committed project history. Long-term provenance still belongs in scaffold/amend/log flows.
+
+Also in this release: review gate persistence-check credibility fix.
+
+Real-project runs surfaced a false "0/22 write APIs have no persistence" failure that badly hurt gate credibility. Three root causes fixed:
+
+- POST query endpoints (list/search/query, etc.) are no longer misclassified as write APIs requiring persistence.
+- Interface-injected services now resolve to their `*Impl` class so persistence evidence inside the impl is found.
+- Backend Java file lookup depth raised from 5 to 12 so deeply nested packages (`.../service/impl/`) are no longer missed.
+
+Effect: a typical project goes from "0/22 false failure" to real verdicts (13/21 truly passing in the test project).
+
 ## [4.0.29] - 2026-06-01
 
 ### Signed Gate Sentinels

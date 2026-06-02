@@ -2,6 +2,35 @@
 
 本文件记录 spec_copilot 规范框架自身的版本变更。遵循 [Semantic Versioning](https://semver.org/)：MAJOR.MINOR.PATCH。
 
+## [4.0.30] - 2026-06-01
+
+### Gate 失败止损计数器（Constraints + Feedback Loops）
+
+test05 暴露了一个高成本模式：gate 失败后，模型会连续多次小修小补、改文档、凑检查，而不是停下来向用户汇报真实阻塞点。本版本增加本地失败台账，让同类 gate 失败在早期变得显眼。
+
+#### 变更
+
+- gate 失败写入 `.spec-copilot/gate-failures.json`，按 `changeName + phase + failure signature` 计数
+- failure signature 优先使用结构化失败 code，没有 code 时退化为首条失败原因的 hash
+- 第 2 次同类失败时提示“下次仍失败将触发止损”
+- 第 3 次及以后输出明确止损提示：暂停继续盲目修补，向用户汇报，并选择“用户指导修复 / 接受并记录降级 / 终止变更”
+- gate 成功后清理当前 change/phase 的失败计数
+
+#### 边界
+
+- 这是流程内 circuit breaker 提示，不是 OS 级硬锁；它不会阻止继续运行命令，但会让继续盲目试错变得可见、可审计
+- 失败台账是本地状态，不是长期项目历史；长期来源记录仍应由后续 scaffold/amend/log 机制承担
+
+#### 同版附带:review gate 持久化检查可信度修复
+
+实跑暴露 review gate 把"写接口持久化"全判为失败(0/22)的误报,严重损害 gate 可信度。修复三处根因:
+
+- POST 查询接口(list/search/query 等)不再被误判为写接口要求落库
+- 接口注入(Service 接口)能解析到其 `*Impl` 实现里的持久化证据
+- 后端 Java 文件查找深度从 5 放宽到 12,避免深层包(`.../service/impl/`)扫不到
+
+效果:典型项目从"0/22 假失败"变为真实判定(实测 13/21 真通过)。
+
 ## [4.0.29] - 2026-06-01
 
 ### Gate 哨兵签名（Tool Orchestration + Constraints）
