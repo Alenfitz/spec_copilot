@@ -310,7 +310,7 @@ function extractBackendApiContracts(projectRoot) {
   const results = [];
 
   for (const root of beRoots) {
-    const controllerFiles = findFiles(root, ['.java']).filter(f => /Controller\.java$/.test(f));
+    const controllerFiles = findFiles(root, ['.java'], 12).filter(f => /Controller\.java$/.test(f));
     for (const file of controllerFiles) {
       const relPath = path.relative(projectRoot, file);
       const content = readSafe(file);
@@ -468,7 +468,7 @@ function checkApiContract(projectRoot, specContent) {
       if (mapped.backendEntry) {
         const [backClass, backFn] = mapped.backendEntry.split('#');
         for (const root of beRoots) {
-          const files = findFiles(root, ['.java', '.kt', '.py', '.go']);
+          const files = findFiles(root, ['.java', '.kt', '.py', '.go'], 12);
           const hit = files.find(file => {
             const content = readSafe(file);
             return content.includes(backClass || '') && content.includes(backFn || '');
@@ -498,7 +498,7 @@ function checkApiContract(projectRoot, specContent) {
         if (feFound) break;
       }
       for (const root of beRoots) {
-        const files = findFiles(root, ['.java', '.kt', '.py', '.go']);
+        const files = findFiles(root, ['.java', '.kt', '.py', '.go'], 12);
         beFound = files.some(f => readSafe(f).includes(shortPath));
         if (beFound) break;
       }
@@ -574,6 +574,27 @@ function checkContractConsistency(projectRoot) {
 
 function isWriteMethod(method) {
   return /^(POST|PUT|PATCH|DELETE)$/i.test(method || '');
+}
+
+// POST 在国内企业 API 里普遍被用于查询/列表(带 body 参数),例如 `POST /work-ticket/list`。
+// 这类端点是读操作,不应按写接口要求落库证据,否则持久化/字段消费检查会误报。
+// 通过端点意图(后端方法名 / 路径末段以读动词开头)识别"读意图",从写接口检查中排除。
+const READ_INTENT_RE = /^(list|search|query|queries|page|paging|find|count|get|detail|info|load|fetch|tree|options?|dict|export|download|preview|view|statistics?|summary|exists?|enum|select)/i;
+
+function isReadIntentEndpoint(row) {
+  const be = row.backendEntry || '';
+  const hashIdx = be.lastIndexOf('#');
+  const fn = hashIdx >= 0 ? be.slice(hashIdx + 1).trim() : '';
+  // 路径末段:跳过 {id} / :id 这类路径变量
+  const segs = (row.path || '').split('/').filter(Boolean)
+    .filter(s => !/^[:{]/.test(s) && !/\}$/.test(s));
+  const seg = segs.length ? segs[segs.length - 1] : '';
+  return READ_INTENT_RE.test(fn) || READ_INTENT_RE.test(seg);
+}
+
+// 真正需要落库/字段消费证据的写接口:HTTP 写方法 且 端点意图不是查询
+function isPersistenceWriteRow(row) {
+  return isWriteMethod(row.method) && !isReadIntentEndpoint(row);
 }
 
 const BUSINESS_TOKEN_STOP_WORDS = new Set([
@@ -694,7 +715,10 @@ function extractInjectedServices(controllerContent) {
 function findJavaClassFile(projectRoot, className) {
   const beRoots = detectBackendRoots(projectRoot);
   for (const root of beRoots) {
-    const candidates = findFiles(root, ['.java']).filter(file => path.basename(file) === `${className}.java`);
+    // Java 包嵌套常见为 src/main/java/com/<org>/<app>/<module>/impl/Xxx.java,
+    // 从 src/main 算起可达 6+ 层。findFiles 默认 maxDepth=5 会漏掉深层的 *Impl,
+    // 导致接口注入的持久化逻辑追不到(假阴性)。这里显式放宽到 12 层。
+    const candidates = findFiles(root, ['.java'], 12).filter(file => path.basename(file) === `${className}.java`);
     if (candidates[0]) return candidates[0];
   }
   return null;
@@ -708,6 +732,24 @@ function extractJavaMethodBody(content, methodName) {
   return extractBalancedBody(content, methodRegex.lastIndex - 1);
 }
 
+// Spring 常见模式:Controller 注入的是接口(如 WorkTicketService),持久化逻辑在其实现类
+// (WorkTicketServiceImpl)里。若只找接口文件,会拿到空/抽象方法体 → 持久化与字段消费假阴性。
+// 这里同时尝试接口本身与其 *Impl,返回第一个能取到非空方法体的 { file, body }。
+function resolveServiceMethodBody(projectRoot, serviceType, methodName) {
+  for (const cls of [serviceType, `${serviceType}Impl`]) {
+    const file = findJavaClassFile(projectRoot, cls);
+    if (!file) continue;
+    const body = extractJavaMethodBody(readSafe(file), methodName);
+    if (body) return { file, body };
+  }
+  // 兜底:实现类命名非 *Impl(如 DefaultXxx)时,至少退回接口文件(方法体可能为空)
+  const fallbackFile = findJavaClassFile(projectRoot, serviceType);
+  if (fallbackFile) {
+    return { file: fallbackFile, body: extractJavaMethodBody(readSafe(fallbackFile), methodName) };
+  }
+  return null;
+}
+
 function hasCalledServicePersistence(projectRoot, backendCall, context) {
   const controllerPath = path.join(projectRoot, backendCall.file);
   const controllerContent = readSafe(controllerPath);
@@ -718,11 +760,9 @@ function hasCalledServicePersistence(projectRoot, backendCall, context) {
     let m;
     while ((m = callRegex.exec(backendCall.body || '')) !== null) {
       const calledMethod = m[1];
-      const serviceFile = findJavaClassFile(projectRoot, service.type);
-      if (!serviceFile) continue;
-      const serviceContent = readSafe(serviceFile);
-      const serviceBody = extractJavaMethodBody(serviceContent, calledMethod);
-      if (hasPersistenceEvidence(serviceBody, {
+      const resolved = resolveServiceMethodBody(projectRoot, service.type, calledMethod);
+      if (!resolved) continue;
+      if (hasPersistenceEvidence(resolved.body, {
         tokens: uniq([...(context && context.tokens ? context.tokens : []), ...splitBusinessTokens(service.type)]),
       })) return true;
     }
@@ -741,15 +781,12 @@ function collectDirectServiceBodies(projectRoot, backendCall) {
     const callRegex = new RegExp(`\\b${service.name}\\s*\\.\\s*([A-Za-z0-9_$]+)\\s*\\(`, 'g');
     let m;
     while ((m = callRegex.exec(backendCall.body || '')) !== null) {
-      const serviceFile = findJavaClassFile(projectRoot, service.type);
-      if (!serviceFile) continue;
-      const serviceContent = readSafe(serviceFile);
-      const serviceBody = extractJavaMethodBody(serviceContent, m[1]);
-      if (serviceBody) bodies.push({
+      const resolved = resolveServiceMethodBody(projectRoot, service.type, m[1]);
+      if (resolved && resolved.body) bodies.push({
         type: service.type,
         method: m[1],
-        file: path.relative(projectRoot, serviceFile),
-        body: serviceBody,
+        file: path.relative(projectRoot, resolved.file),
+        body: resolved.body,
       });
     }
   }
@@ -774,10 +811,10 @@ function checkWriteFieldConsumption(projectRoot, specContent) {
   const coverageRows = extractApiCoverageMatrix(specContent);
   const fieldRows = extractApiFieldChecklist(specContent);
   const fieldById = new Map(fieldRows.map(row => [row.id, row]));
-  const writeRows = coverageRows.filter(row => isWriteMethod(row.method) && fieldById.has(row.id));
+  const writeRows = coverageRows.filter(row => isPersistenceWriteRow(row) && fieldById.has(row.id));
 
   if (writeRows.length === 0) {
-    return { pass: true, checked: 0, message: 'spec 中无带字段清单的写接口' };
+    return { pass: true, checked: 0, message: 'spec 中无带字段清单的写接口(已排除查询型 POST)' };
   }
 
   const backendApis = extractBackendApiContracts(projectRoot);
@@ -832,9 +869,9 @@ function checkWriteFieldConsumption(projectRoot, specContent) {
 
 function checkWritePersistenceClosure(projectRoot, specContent) {
   const coverageRows = extractApiCoverageMatrix(specContent);
-  const writeRows = coverageRows.filter(row => isWriteMethod(row.method));
+  const writeRows = coverageRows.filter(row => isPersistenceWriteRow(row));
   if (writeRows.length === 0) {
-    return { pass: true, checked: 0, message: 'spec 中无 POST/PUT/PATCH/DELETE 写接口矩阵行' };
+    return { pass: true, checked: 0, message: 'spec 中无写接口矩阵行(已排除 list/search/query 等查询型 POST)' };
   }
 
   const backendApis = extractBackendApiContracts(projectRoot);

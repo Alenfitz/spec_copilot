@@ -692,3 +692,96 @@ class UserService {
     cleanup(dir);
   }
 });
+
+// ── v4.0.x: gate 可信度修复(POST 查询误判 + 接口注入/深层 Impl 解析)──
+
+test('checkWritePersistenceClosure: POST 查询接口(list)不按写接口要求落库', () => {
+  const dir = mkTmp();
+  try {
+    fs.mkdirSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+  public TicketController(TicketService ticketService) { this.ticketService = ticketService; }
+
+  @PostMapping("/list")
+  public Object list(@RequestBody Map<String, Object> request) {
+    return ticketService.queryPage(request); // 仅查询,无落库
+  }
+}
+`, 'utf-8');
+
+    const spec = `
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/list | \`src/api/ticket.ts#listTickets\` | \`TicketController#list\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    // list 是查询型 POST,被排除 → 不应作为"无落库证据"的写接口失败
+    assert.strictEqual(result.pass, true, 'POST /list 查询不应被判为写接口失败');
+    assert.strictEqual(result.checked, 0, '查询型 POST 应被排除,无写接口需检查');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('checkWritePersistenceClosure: 接口注入 + 深层 *Impl(>5层包)能解析到持久化', () => {
+  const dir = mkTmp();
+  try {
+    // 模拟真实 Java 包嵌套:src/main/java/com/example/app/module/{controller,service,service/impl}
+    const base = path.join(dir, 'hf-server', 'src', 'main', 'java', 'com', 'example', 'app', 'module');
+    fs.mkdirSync(path.join(base, 'controller'), { recursive: true });
+    fs.mkdirSync(path.join(base, 'service', 'impl'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'hf-server', 'pom.xml'), '<project></project>', 'utf-8');
+
+    fs.writeFileSync(path.join(base, 'controller', 'TicketController.java'), `
+import org.springframework.web.bind.annotation.*;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/tickets")
+class TicketController {
+  private final TicketService ticketService;
+  public TicketController(TicketService ticketService) { this.ticketService = ticketService; }
+
+  @PostMapping("/save")
+  public Object save(@RequestBody Map<String, Object> request) {
+    return ticketService.create(request);
+  }
+}
+`, 'utf-8');
+
+    // 注入的是接口,接口无方法体
+    fs.writeFileSync(path.join(base, 'service', 'TicketService.java'), `
+interface TicketService { Object create(Object request); }
+`, 'utf-8');
+
+    // 真正落库在深层 *Impl 里
+    fs.writeFileSync(path.join(base, 'service', 'impl', 'TicketServiceImpl.java'), `
+class TicketServiceImpl implements TicketService {
+  private final TicketMapper ticketMapper;
+  public TicketServiceImpl(TicketMapper ticketMapper) { this.ticketMapper = ticketMapper; }
+  public Object create(Object request) { return ticketMapper.insert(request); }
+}
+`, 'utf-8');
+
+    const spec = `
+### 6.1 接口覆盖矩阵
+| API ID | Method | Path | 前端调用方 | 后端实现入口 | 关联功能点 |
+|-------|--------|------|-----------|-------------|----------|
+| API01 | POST | /api/tickets/save | \`src/api/ticket.ts#saveTicket\` | \`TicketController#save\` | F01 |
+`;
+    const result = reviewChecks.checkWritePersistenceClosure(dir, spec);
+    assert.strictEqual(result.pass, true, '接口注入+深层 Impl 应能解析到 insert 落库');
+    assert.strictEqual(result.matched, 1);
+  } finally {
+    cleanup(dir);
+  }
+});
