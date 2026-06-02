@@ -785,3 +785,32 @@ class TicketServiceImpl implements TicketService {
     cleanup(dir);
   }
 });
+
+// ── 功能点提取:范围引用不应产生幽灵功能点 ──
+
+test('extractFeaturePointIds: 不把"F01-F23"范围里的端点当独立功能点', () => {
+  const spec = '## 3. 功能点\n- **F01 列表查询**:...\n> 注:业需 F01-F23 中无独立"查看"功能点。';
+  const ids = reviewChecks.extractFeaturePointIds(spec);
+  assert.deepStrictEqual(ids, ['F01'], `应只提取声明的 F01,实际:${JSON.stringify(ids)}`);
+});
+
+test('extractFeaturePointIds: 各种范围连接符(- ~ 至 到)都不产生幽灵功能点', () => {
+  for (const sep of ['-', '~', '～', '–', '—', '至', '到']) {
+    const spec = `- **F01 ...**\n参考 F01${sep}F20 全部功能。`;
+    const ids = reviewChecks.extractFeaturePointIds(spec);
+    assert.deepStrictEqual(ids, ['F01'], `分隔符 "${sep}" 仍漏出幽灵功能点:${JSON.stringify(ids)}`);
+  }
+});
+
+test('extractFeaturePointIds: 真实声明的多个功能点都保留', () => {
+  const spec = '- **F01 列表**\n- **F02 新建**\n- **F04 编制**\n§6.1 关联 F01/F02/F04';
+  const ids = reviewChecks.extractFeaturePointIds(spec).sort();
+  assert.deepStrictEqual(ids, ['F01', 'F02', 'F04']);
+});
+
+test('extractFeaturePointIds: 范围两端若另有独立声明则仍保留', () => {
+  // F01 和 F23 各自有独立声明行,即使也出现在 "F01-F23" 范围里也应保留
+  const spec = '- **F01 列表**\n- **F23 运行值班日志**\n覆盖 F01-F23 全部。';
+  const ids = reviewChecks.extractFeaturePointIds(spec).sort();
+  assert.deepStrictEqual(ids, ['F01', 'F23']);
+});

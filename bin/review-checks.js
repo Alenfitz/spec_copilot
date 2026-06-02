@@ -166,6 +166,16 @@ function extractRuleMatrix(specContent) {
  * v4: 6 列（id/method/path/frontendCaller/backendEntry/featurePoint）
  * 最低要求：前 5 列（id/method/path/frontendCaller/backendEntry）
  */
+// 从 spec 提取"声明的功能点 ID"(F01/F23…)用于覆盖率统计。
+// 必须先剥掉"F01-F23 / F01~F23 / F01 至 F23"这类范围引用——否则范围端点(如 F23)
+// 会被误当成一个独立声明的功能点,导致覆盖率分母虚高、出现永远命中不了的"幽灵功能点"。
+function extractFeaturePointIds(specContent) {
+  const cleaned = String(specContent || '')
+    .replace(/F\d{2,}\s*[-~～〜–—]\s*F\d{2,}/g, ' ')
+    .replace(/F\d{2,}\s*(?:至|到)\s*F\d{2,}/g, ' ');
+  return [...new Set(cleaned.match(/F\d{2,}/g) || [])];
+}
+
 function extractApiCoverageMatrix(specContent) {
   const rows = [];
   for (const line of specContent.split('\n')) {
@@ -1505,4 +1515,5 @@ module.exports = {
   checkHardcodedIdentities,
   checkRouteCompleteness,
   checkRuleCoverage,
+  extractFeaturePointIds,
 };

@@ -35,6 +35,7 @@ const {
 const {
   checkContractConsistency,
   checkHardcodedIdentities,
+  extractFeaturePointIds,
 } = require('./review-checks');
 const {
   copyDir,
@@ -1212,7 +1213,7 @@ async function cmdGate(args) {
       }
 
       // ─── 程序化覆盖率检查：spec 功能点 → 代码实现（加权：前+后端均有 = 1 分；仅后端 = 0.5；仅前端 = 0.5；都无 = 0） ───
-      const featurePointIds = [...new Set(specContent.match(/F\d{2,}/g) || [])];
+      const featurePointIds = extractFeaturePointIds(specContent);
       // 简化的前后端文件分类
       const isFrontendFile = (f) =>
         /\.(vue|tsx|jsx)$/.test(f) ||

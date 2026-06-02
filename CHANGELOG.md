@@ -4,6 +4,21 @@ This file records project-level changes for `@alenfitz/spec-copilot`.
 
 The framework-installed changelog is also kept at `framework/CHANGELOG.md` so users who install or update the framework can see the same evolution inside the generated framework files.
 
+## [4.0.33] - 2026-06-02
+
+### Feature coverage: "phantom feature point" from range references fixed
+
+The `gate review` weighted feature coverage extracted feature point IDs with `/F\d{2,}/g` over the whole
+spec. A prose range reference like "F01-F23" made the regex treat the endpoint `F23` as a separately
+declared feature point; with no implementation it inflated the denominator and created a permanently
+unmatched "phantom" feature point (coverage observed dropping to 50%).
+
+Fix: added `extractFeaturePointIds`, which strips range references (`F01-F23 / F01~F23 / F01 至 F23 /
+F01 到 F23`, supporting `- ~ ～ – — 至 到` connectors) before extraction; endpoints that are also
+declared on their own are still kept.
+
+Effect: feature-point range descriptions in a spec no longer pollute coverage. Added 4 regression tests; 132 tests pass.
+
 ## [4.0.32] - 2026-06-02
 
 ### review frontend strict check: API path false positive fix
